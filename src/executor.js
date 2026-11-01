@@ -57,15 +57,13 @@ async function connect() {
   const caps = capabilities();
   assert(caps.scripting && caps.sessionStorage && caps.worker && caps.locks,
     'В браузере недоступны scripting, session storage, Web Locks или Worker. Подробности — в диагностике настроек.'
-    );
+  );
   const options = await chrome.storage.local.get(['cloud-consent', 'chat-bindings', 'browser-mode']);
   assert(options['cloud-consent'] === true, 'Разрешите передачу данных в настройках');
   await files.restore();
   await files.permission();
-  const config = options['chat-bindings'];
-  assert(config?.input && config?.send && config?.response && config?.complete,
-    'В настройках привяжите элементы чата четырьмя касаниями');
-  await model.connect(tabId, config);
+  const state = await model.connect(tabId, options['chat-bindings'] || {});
+  assert(state.status === 'ready', state.reason || 'Чат ещё не готов к отправке');
   return options;
 }
 async function restoreController() {

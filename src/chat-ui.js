@@ -1,5 +1,8 @@
 /* Isolated content script. Page scripts cannot call the extension message bridge. */
-(() => {
+(async () => {
+  const {
+    deepseekDOM
+  } = await import(chrome.runtime.getURL('src/chat-dom.js'));
   let enabled = false,
     busy = false,
     config = {},
@@ -43,14 +46,16 @@
     }
     throw new Error(
       'Встроенный исполнитель недоступен. Обновите DeepSeek; если ошибка повторяется, откройте диагностику настроек.'
-      );
+    );
   }
   const send = message => chrome.runtime.sendMessage(message);
   const load = async () => {
     config = (await chrome.storage.local.get('chat-bindings'))['chat-bindings'] || {};
   };
   load();
-  chrome.storage.onChanged.addListener(load);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes['chat-bindings']) config = changes['chat-bindings'].newValue || {};
+  });
   settings.onclick = () => send({
     type: 'open-workspace'
   });
@@ -63,20 +68,21 @@
       return;
     }
     try {
+      await load();
       await ensureExecutor();
       const result = await send({
         type: 'chat-ready'
       });
       if (!result?.ok) throw new Error(result?.error || 'Откройте настройки и выберите папку проекта.');
-      if (!config.input || !config.send || !config.response || !config.complete) throw new Error(
-        'Откройте настройки и выполните привязку четырьмя кликами.');
+
     } catch (e) {
       enabled = false;
       toggle.checked = false;
       alert(e.message);
     }
   };
-  const input = () => config.input && document.querySelector(config.input);
+  const elements = () => deepseekDOM('elements', config);
+  const input = () => elements().input;
   async function submit() {
     if (busy) return;
     const element = input();
@@ -99,7 +105,7 @@
   function intercept(event) {
     if (!enabled || picking || !event.isTrusted) return;
     const element = input();
-    const click = event.type === 'click' && config.send && event.target.closest(config.send);
+    const click = event.type === 'click' && elements().send?.contains(event.target);
     const enter = event.type === 'keydown' && event.key === 'Enter' && !event.shiftKey && !event
       .isComposing && element?.contains(event.target);
     if (!click && !enter) return;
@@ -147,8 +153,7 @@
       const css = element.localName + classes.map(c => '.' + CSS.escape(c)).join('');
       if (repeated || root.querySelectorAll(css).length === 1) return css;
     }
-    if (repeated) throw new Error(
-      'У блока ответа нет устойчивого признака. Выберите его внешний контейнер.');
+    if (repeated) return ''; // Automatic toolbar discovery handles containers without stable attributes.
     let node = element,
       parts = [];
     while (node && node !== root && node !== document.documentElement) {
@@ -240,7 +245,7 @@
         if (key === 'complete') {
           while (response && !response.contains(element)) response = response.parentElement;
           if (!response || response === document.body || response === document.documentElement)
-          throw new Error('Выберите текст и кнопку одного ответа.');
+            throw new Error('Выберите текст и кнопку одного ответа.');
           result.response = selector(response, document, true);
         }
         result[key] = selector(element, key === 'complete' ? response : document);
