@@ -1,0 +1,62 @@
+{
+  "date": "2026-11-01",
+  "environment": "Chromium 154 Linux, HTTP harness + real CDP transport, not an installed extension",
+  "passed": 13,
+  "failed": 0,
+  "realDeepSeekVerified": false,
+  "extensionLoadVerified": false,
+  "results": [
+    {
+      "name": "JSON: корректная команда, запрет лишних полей и инструментов",
+      "ok": true
+    },
+    {
+      "name": "Пути: запрет выхода, Windows-имён, абсолютных путей",
+      "ok": true
+    },
+    {
+      "name": "URL: запрет модели, схем и учётных данных",
+      "ok": true
+    },
+    {
+      "name": "IndexedDB и File API: восстановление, конфликт, отзыв разрешения",
+      "ok": true
+    },
+    {
+      "name": "Восстановление незавершённой операции; таймаут",
+      "ok": true
+    },
+    {
+      "name": "CDP / BrowserTools: открытие, snapshot, текст/ссылки/таблицы, stale DOM, ввод, навигация",
+      "ok": true
+    },
+    {
+      "name": "DOM-адаптер: вставка, отправка, генерация, завершение на chat fixture",
+      "ok": true
+    },
+    {
+      "name": "Pyodide: pandas, статистика, matplotlib, файл и изоляция",
+      "ok": true
+    },
+    {
+      "name": "Python: таймаут и остановка завершают Worker",
+      "ok": true
+    },
+    {
+      "name": "Сквозной цикл с тестовой моделью: корпус → Python → CSV/отчёт; duplicate guard",
+      "ok": true
+    },
+    {
+      "name": "Неподтверждённая цитата отклоняется",
+      "ok": true
+    },
+    {
+      "name": "Пауза не выдаёт новые команды; stop отменяет ожидание",
+      "ok": true
+    },
+    {
+      "name": "Исправление JSON ограничено; неопределённая команда блокирует повтор",
+      "ok": true
+    }
+  ]
+}

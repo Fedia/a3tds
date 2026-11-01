@@ -1,0 +1,118 @@
+import {
+  assert,
+  pathParts,
+  hash
+} from './util.js';
+export class ProjectFiles {
+  constructor(store) {
+    this.store = store;
+  }
+  async restore() {
+    this.root = await this.store.get('directory');
+  }
+  async choose() {
+    const candidate = await showDirectoryPicker({
+      mode: 'readwrite',
+      id: 'psy-agent-project'
+    });
+    try {
+      const f = await (await candidate.getFileHandle('manifest.json')).getFile();
+      const m = JSON.parse(await f.text());
+      assert(!m.manifest_version, 'Выберите отдельную папку результатов, не папку расширения');
+    } catch (e) {
+      if (e.name !== 'NotFoundError' && e.name !== 'SyntaxError') throw e;
+    }
+    const previous = await this.store.get('directory');
+    if (!previous || !await previous.isSameEntry(candidate)) await this.store.put('owned-files', {});
+    this.root = candidate;
+    await this.store.put('directory', this.root);
+    await this.authorize();
+  }
+  async authorize() {
+    assert(this.root, 'Выберите папку');
+    assert(await this.root.requestPermission({
+      mode: 'readwrite'
+    }) === 'granted', 'Нет разрешения на папку');
+  }
+  async permission() {
+    assert(this.root && await this.root.queryPermission({
+      mode: 'readwrite'
+    }) === 'granted', 'Нажмите «Доступ к папке», чтобы восстановить разрешение');
+  }
+  async parent(path, create = false) {
+    await this.permission();
+    const p = pathParts(path);
+    let d = this.root;
+    for (const segment of p.slice(0, -1)) d = await d.getDirectoryHandle(segment, {
+      create
+    });
+    return [d, p.at(-1)];
+  }
+  async list() {
+    await this.permission();
+    const out = [];
+    for await (const [name, h] of this.root.entries()) {
+      out.push({
+        name,
+        kind: h.kind
+      });
+      if (out.length >= 300) break;
+    }
+    return {
+      entries: out,
+      truncated: out.length >= 300
+    };
+  }
+  async read(path, offset = 0, limit = 12000) {
+    const [d, n] = await this.parent(path);
+    const f = await (await d.getFileHandle(n)).getFile();
+    assert(f.size <= 10000000, 'Файл больше 10 МБ');
+    const text = await f.text();
+    return {
+      path,
+      totalCharacters: text.length,
+      offset,
+      text: text.slice(offset, offset + limit),
+      truncated: offset + limit < text.length
+    };
+  }
+  /** Never overwrite an unowned or externally modified file. Ownership is content-hash based. */
+  async write(path, text, {
+    owned = false
+  } = {}) {
+    assert((typeof text === 'string' || text instanceof Uint8Array) && text.length <= 10000000,
+      'Слишком большой файл');
+    const [d, n] = await this.parent(path, true);
+    let name = n;
+    const owners = await this.store.get('owned-files') || {};
+    let existing;
+    try {
+      existing = await (await d.getFileHandle(name)).getFile();
+    } catch (e) {
+      if (e.name !== 'NotFoundError') throw e;
+    }
+    if (existing) {
+      const current = await hash(new Uint8Array(await existing.arrayBuffer()));
+      if (!(owned && owners[path] === current)) name = n.replace(/(\.[^.]+)?$/,
+        `-${crypto.randomUUID().slice(0,8)}$1`);
+    }
+    const h = await d.getFileHandle(name, {
+      create: true
+    });
+    const stream = await h.createWritable();
+    try {
+      await stream.write(text);
+      await stream.close();
+    } catch (e) {
+      await stream.abort().catch(() => {});
+      throw e;
+    }
+    const actual = [...pathParts(path).slice(0, -1), name].join('/');
+    owners[actual] = await hash(text);
+    await this.store.put('owned-files', owners);
+    return {
+      path: actual,
+      characters: text.length
+    };
+  }
+}

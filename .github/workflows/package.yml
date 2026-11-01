@@ -1,0 +1,43 @@
+name: Package Chrome extension
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Set up Node for syntax checks
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find src fixtures tests -type f -name '*.js' -print0)
+
+      - name: Validate local dependencies and create ZIP
+        run: python3 .github/scripts/package.py
+
+      - name: Upload extension archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: psy-agent-${{ github.sha }}
+          path: |
+            dist/psy-agent.zip
+            dist/psy-agent.zip.sha256
+          if-no-files-found: error
+          retention-days: 30

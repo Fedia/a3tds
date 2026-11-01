@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "ПсихоАгент MVP",
+  "version": "0.1.0",
+  "minimum_chrome_version": "120",
+  "description": "Локальный браузерный агент с веб-чатом DeepSeek и Python",
+  "permissions": [
+    "tabs",
+    "storage",
+    "unlimitedStorage",
+    "sidePanel",
+    "debugger",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://chat.deepseek.com/*"
+  ],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "ПсихоАгент"
+  },
+  "side_panel": {
+    "default_path": "panel.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; worker-src 'self'; connect-src 'self'; base-uri 'none';",
+    "sandbox": "sandbox allow-scripts; script-src 'self' chrome-extension: 'wasm-unsafe-eval'; object-src 'none'; worker-src blob:; connect-src chrome-extension:; base-uri 'none';"
+  },
+  "sandbox": {
+    "pages": [
+      "python-sandbox.html"
+    ]
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/python-worker.js",
+        "vendor/pyodide/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}

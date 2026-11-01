@@ -1,0 +1,135 @@
+:root {
+  font: 16px/1.5 system-ui, sans-serif;
+  color: #1c2938;
+  background: #edf2f5
+}
+
+body {
+  margin: 0
+}
+
+main {
+  max-width: 1040px;
+  margin: 24px auto;
+  padding: 0 24px
+}
+
+section {
+  background: white;
+  border: 1px solid #d1dce4;
+  border-radius: 12px;
+  padding: 22px;
+  margin: 18px 0
+}
+
+h1,
+h2 {
+  line-height: 1.2
+}
+
+h2 {
+  font-size: 20px
+}
+
+small {
+  font-size: 14px;
+  color: #527085
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit
+}
+
+button {
+  border: 1px solid #577084;
+  background: #fff;
+  color: #123448;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 5px 5px 5px 0;
+  cursor: pointer
+}
+
+button:hover {
+  background: #e3f1f5
+}
+
+button:disabled {
+  opacity: .5;
+  cursor: default
+}
+
+#start,
+#approve {
+  background: #14625e;
+  color: white
+}
+
+#stop,
+#deny {
+  color: #a02626
+}
+
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #9aafbd;
+  border-radius: 5px;
+  padding: 10px
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 13px/1.5 ui-monospace, monospace;
+  max-height: 460px;
+  overflow: auto
+}
+
+#selectors {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px
+}
+
+#selectors label {
+  display: flex;
+  flex-direction: column;
+  font-size: 14px
+}
+
+input[type=text] {
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid #9aafbd
+}
+
+#status {
+  font-weight: bold;
+  color: #155f58
+}
+
+#approval {
+  border: 2px solid #a16916
+}
+
+footer {
+  padding: 15px
+}
+
+a {
+  color: #096170
+}
+
+@media(max-width:600px) {
+  #selectors {
+    grid-template-columns: 1fr
+  }
+
+  main {
+    padding: 0 10px
+  }
+}
