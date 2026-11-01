@@ -81,6 +81,13 @@ export class DeepSeekAdapter {
       }
     });
     assert(!this.abort, 'Отправка отменена до нажатия кнопки');
+    for (let attempt = 0; attempt < 10; attempt++) {
+      assert(!this.abort, 'Отправка отменена');
+      const state = await this.inspect();
+      if (state.sendEnabled !== false) break;
+      assert(state.status === 'ready', state.reason || 'Чат не готов к отправке');
+      await sleep(150);
+    }
     await this.dom('submit');
     this.onStatus?.('waiting-response');
     return this.waitAnswer({
@@ -100,7 +107,9 @@ export class DeepSeekAdapter {
       if (['login-required', 'service-error', 'user-required'].includes(s.status)) throw new Error(s
         .reason || s.status);
       if (s.status === 'generating') seenGeneration = true;
-      const changed = s.count > before.count && s.answer && s.answer.trim() !== before.sentPrompt?.trim();
+      // DeepSeek virtualizes messages: the number of mounted answers may stay constant.
+      const changed = s.answer && (s.count > before.count || s.answer !== before.answer) &&
+        s.answer.trim() !== before.sentPrompt?.trim();
       stable = changed && s.answer === last ? stable + 1 : 0;
       last = s.answer;
       // Stability is supplementary; a completion marker, absent stop, and enabled composer are mandatory.

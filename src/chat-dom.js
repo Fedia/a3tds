@@ -21,12 +21,28 @@ export function deepseekDOM(action, config, payload) {
     !e.parentElement.closest(
       '[data-message-author-role="assistant"],[data-role="assistant"],[data-author="assistant"]'));
   const composer = unique(all('textarea,[contenteditable="true"][role="textbox"]'));
+  // Observed in the user-supplied DeepSeek DOM (2026-11-01). SVG fingerprints
+  // supplement semantic labels; unknown icons never authorize sending.
+  const icon = (e, prefix) => !!e?.querySelector(`svg path[d^="${prefix}"]`);
+  let composerRoot = composer?.parentElement;
+  while (composerRoot && composerRoot !== document.body &&
+    !composerRoot.querySelector('[role=button].ds-button--primary.ds-button--circle')) {
+    composerRoot = composerRoot.parentElement;
+  }
+  const primary = composerRoot && composerRoot !== document.body ? unique(all(
+    '[role=button].ds-button--primary.ds-button--circle', composerRoot)) : null;
+  const observedSend = icon(primary, 'M8.3125 0.980206') ? primary : null;
+  const disabled = e => !!e && (e.disabled || e.getAttribute('aria-disabled') === 'true' ||
+    e.classList.contains('ds-button--disabled'));
+  const assistantBodies = () => all('.ds-assistant-message-main-content');
+  const observedResponses = () => assistantBodies().map(e => e.closest('.ds-message')?.parentElement)
+    .filter(e => e && assistantBodies().filter(b => e.contains(b)).length === 1);
   const alerts = all('[role="alert"],[role="dialog"],[aria-live="assertive"]');
   const notice = re => alerts.find(e => re.test(label(e)));
   const detected = {
     input: composer,
-    send: unique(named(/^(send|send message|отправить|отправить сообщение|发送)(\s|$)/i)),
-    stop: unique(named(/stop (generating|generation|response)|остановить|停止生成/i)),
+    send: observedSend || unique(named(/^(send|send message|отправить|отправить сообщение|发送)(\s|$)/i)),
+    stop: (primary && !observedSend ? primary : null) || unique(named(/stop (generating|generation|response)|остановить|停止生成/i)),
     login: !composer && (unique(named(/^(log in|sign in|войти|登录)$/i)) || document.querySelector(
       'input[type="password"]')),
     challenge: notice(/captcha|verify.*human|провер.*человек|подтверд.*человек|人机验证/i) || all(
@@ -36,11 +52,15 @@ export function deepseekDOM(action, config, payload) {
     )
   };
   // Never select an arbitrary last button when a binding matches several controls.
-  const one = k => unique(bound(k)) || detected[k] || null;
+  const one = k => (k === 'send' && primary ? observedSend : unique(bound(k)) || detected[k]) || null;
   const copyPattern = /^(copy( response| message)?|копировать( ответ| сообщение)?|复制|regenerate|повторить ответ)(\s|$)/i;
   const completion = root => unique(bound('complete', root)) ||
-    all('button,[role=button]', root).find(e => copyPattern.test(label(e)));
+    all('button,[role=button]', root).find(e => copyPattern.test(label(e))) ||
+    (root.querySelector('.ds-assistant-message-main-content') && all('button,[role=button]', root)
+      .find(e => !e.closest('.ds-markdown') && icon(e, 'M6.14929 4.02032')));
   const responseNodes = () => {
+    const observed = observedResponses();
+    if (observed.length) return observed;
     const semantic = assistantNodes();
     if (semantic.length) return semantic;
     // A manual answer container is useful only if it also owns its action toolbar.
@@ -66,7 +86,7 @@ export function deepseekDOM(action, config, payload) {
     return [...new Set(inferred)];
   };
   const responses = nodes => nodes.map(e => {
-    const c = e.cloneNode(true);
+    const c = (e.querySelector('.ds-assistant-message-main-content') || e).cloneNode(true);
     if (config.complete) {
       try {
         c.querySelectorAll(config.complete).forEach(x => x.remove());
@@ -101,6 +121,7 @@ export function deepseekDOM(action, config, payload) {
       stop: !!stop,
       input: !!input,
       send: !!send,
+      sendEnabled: !!send && !disabled(send),
       reason: challenge ? 'CAPTCHA или участие пользователя' : login ? 'Требуется вход' : error ?
         'Ошибка/ограничение сервиса' : status === 'user-required' ?
         !input ? 'Не удалось однозначно найти поле сообщения. Закройте диалоги или уточните привязку поля в настройках.' : 'Не удалось однозначно найти кнопку отправки. Уточните её привязку в настройках.' : '',
@@ -154,7 +175,7 @@ export function deepseekDOM(action, config, payload) {
   }
   if (action === 'submit') {
     const send = one('send');
-    if (!send || send.disabled) throw new Error('Кнопка отправки недоступна');
+    if (!send || disabled(send)) throw new Error('Кнопка отправки недоступна');
     send.click();
     return {
       attempted: true

@@ -400,7 +400,7 @@ export class AgentController {
     assert(outbound.phase === 'send-uncertain',
       'Запрос не был отправлен: очистите поле чата вручную, затем используйте отмену отправки');
     const s = await this.model.inspect();
-    assert(s.completion && !s.stop && s.status === 'ready' && s.count > outbound.before.count && s.answer &&
+    assert(s.completion && !s.stop && s.status === 'ready' && s.answer && (s.count > outbound.before.count || s.answer !== outbound.before.answer) &&
       s.answer.trim() !== outbound.prompt?.trim(),
       'Нет доказательства нового завершённого ответа');
     this.s.received = s.answer;
