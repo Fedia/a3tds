@@ -132,6 +132,37 @@ export function pageOperation(op, args) {
       scrolled: args.delta
     };
   }
+  if (op === 'interact') {
+    pageOperation('locate', args);
+    const element = state.refs[args.element];
+    state.token = null;
+    if (args.action === 'click') element.click();
+    else {
+      if (!element.matches(
+          'textarea,input:not([type]),input[type=text],input[type=search],input[type=email],input[type=url],input[type=tel]'
+          )) throw new Error('Ввод только в текстовые поля');
+      element.focus();
+      const start = element.selectionStart ?? element.value.length;
+      const end = element.selectionEnd ?? start;
+      const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement
+        .prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(element, element.value.slice(0, start) + args
+        .text + element.value.slice(end));
+      element.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'insertText',
+        data: args.text
+      }));
+      element.dispatchEvent(new Event('change', {
+        bubbles: true
+      }));
+    }
+    return {
+      performed: args.action,
+      requiresSnapshot: true,
+      transport: 'scripting'
+    };
+  }
   if (op === 'invalidate') {
     state.token = null;
     return true;
@@ -145,7 +176,7 @@ export class BrowserTools {
     this.attached = new Set();
     this.contexts = new Map();
     this.interrupted = false;
-    chrome.debugger.onDetach.addListener((source, reason) => {
+    chrome.debugger?.onDetach?.addListener((source, reason) => {
       if (this.attached.delete(source.tabId)) {
         this.contexts.delete(source.tabId);
         this.interrupted = true;
@@ -171,6 +202,8 @@ export class BrowserTools {
   async attach(id) {
     await this.check(id);
     if (this.attached.has(id)) return;
+    assert(chrome.debugger?.attach,
+      'Этот браузер не поддерживает CDP. Включите совместимый режим в настройках.');
     await chrome.debugger.attach({
       tabId: id
     }, '1.3');
@@ -182,7 +215,22 @@ export class BrowserTools {
       tabId: id
     }, method, params), 20000, 'CDP ' + method);
   }
+  useScripting() {
+    return this.transport === 'scripting' || !chrome.debugger?.attach;
+  }
   async run(id, op, args = {}) {
+    if (this.useScripting()) {
+      await this.check(id);
+      const [result] = await timeout(chrome.scripting.executeScript({
+        target: {
+          tabId: id
+        },
+        func: pageOperation,
+        args: [op, args]
+      }), 20000, 'Инструмент страницы');
+      assert(result, 'Страница недоступна. Разрешите доступ к сайтам в настройках.');
+      return result.result;
+    }
     await this.attach(id);
     await this.check(id);
     const {
@@ -256,6 +304,10 @@ export class BrowserTools {
         reason: 'Взаимодействие может отправить данные или изменить сайт. Подтвердите конкретное действие.'
       });
       info = await this.run(a.tabId, 'locate', a);
+      if (this.useScripting()) return this.run(a.tabId, 'interact', {
+        ...a,
+        action: op
+      });
       await this.send(a.tabId, 'Input.dispatchMouseEvent', {
         type: 'mousePressed',
         x: info.x,

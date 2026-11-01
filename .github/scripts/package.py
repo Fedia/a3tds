@@ -26,9 +26,8 @@ def package():
         raise ValueError("Expected Manifest V3")
     for relative in [
         manifest["background"]["service_worker"],
-        manifest["side_panel"]["default_path"],
         *manifest["sandbox"]["pages"],
-        "workspace.html", "src/python-worker.js",
+        "workspace.html", "executor.html", "src/executor.js", "src/chat-ui.js", "src/python-worker.js",
     ]:
         local_file(relative)
 

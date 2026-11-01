@@ -36,7 +36,9 @@ export class StateStore {
       summary: {
         status: s.status,
         message: s.reason || s.current || '',
-        updated: Date.now()
+        updated: Date.now(),
+        files: s.files,
+        ownerTabId: s.modelTabId
       }
     });
   }

@@ -162,6 +162,52 @@ test('CDP / BrowserTools: открытие, snapshot, текст/ссылки/т
   await browser.detach();
   for (const t of state.tabs) await chrome.tabs.remove(t.id);
 });
+test('Совместимый режим: snapshot, касание/клик, ввод и устаревшие ссылки без CDP', async () => {
+  const state = {
+    tabs: [],
+    id: 'scripting-test'
+  };
+  const tools = new BrowserTools(state, async () => {}, async () => {});
+  tools.transport = 'scripting';
+  const tab = await tools.open(chrome.runtime.getURL('fixtures/article.html'), {
+    fixture: true
+  });
+  try {
+    const snapshot = await tools.run(tab.tabId, 'snapshot');
+    const field = snapshot.elements.find(e => e.tag === 'input');
+    await tools.execute('browser.type', {
+      tabId: tab.tabId,
+      snapshot: snapshot.snapshot,
+      element: field.id,
+      text: 'mobile input'
+    });
+    const [read] = await chrome.scripting.executeScript({
+      target: {
+        tabId: tab.tabId
+      },
+      func: () => document.querySelector('input').value
+    });
+    assert(read.result === 'mobile input', 'Ввод через стандартные API');
+    await fail(() => tools.execute('browser.type', {
+      tabId: tab.tabId,
+      snapshot: snapshot.snapshot,
+      element: field.id,
+      text: 'stale'
+    }));
+    const next = await tools.run(tab.tabId, 'snapshot');
+    const button = next.elements.find(e => e.label === 'Обновить данные');
+    await tools.execute('browser.click', {
+      tabId: tab.tabId,
+      snapshot: next.snapshot,
+      element: button.id
+    });
+    assert((await tools.run(tab.tabId, 'snapshot')).text.includes('Новый текст'),
+      'Программный клик выполнен');
+  } finally {
+    await tools.detach();
+    await chrome.tabs.remove(tab.tabId);
+  }
+});
 test('DOM-адаптер: вставка, отправка, генерация, завершение на chat fixture', async () => {
   const tab = await chrome.tabs.create({
     url: chrome.runtime.getURL('fixtures/chat.html'),
@@ -184,7 +230,7 @@ test('DOM-адаптер: вставка, отправка, генерация, 
         tabId: tab.id
       },
       func: deepseekDOM,
-      args: [action, config, payload || null]
+      args: [action, {}, payload || null]
     });
     return r.result;
   };

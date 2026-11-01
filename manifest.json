@@ -1,14 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "ПсихоАгент MVP",
-  "version": "0.1.0",
+  "name": "Агент для DeepSeek",
+  "version": "0.2.0",
   "minimum_chrome_version": "120",
   "description": "Локальный браузерный агент с веб-чатом DeepSeek и Python",
   "permissions": [
     "tabs",
     "storage",
     "unlimitedStorage",
-    "sidePanel",
     "debugger",
     "scripting"
   ],
@@ -21,9 +20,6 @@
   },
   "action": {
     "default_title": "ПсихоАгент"
-  },
-  "side_panel": {
-    "default_path": "panel.html"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; worker-src 'self'; connect-src 'self'; base-uri 'none';",
@@ -43,6 +39,29 @@
       "matches": [
         "<all_urls>"
       ]
+    },
+    {
+      "resources": [
+        "executor.html"
+      ],
+      "matches": [
+        "https://chat.deepseek.com/*"
+      ]
     }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.deepseek.com/*"
+      ],
+      "js": [
+        "src/chat-ui.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ]
 }

@@ -8,9 +8,31 @@ export class ProjectFiles {
     this.store = store;
   }
   async restore() {
-    this.root = await this.store.get('directory');
+    const mode = (await chrome.storage.local.get('file-mode'))['file-mode'];
+    this.mode = mode;
+    if (mode === 'browser') {
+      assert(navigator.storage?.getDirectory, 'Браузер не поддерживает внутреннее файловое хранилище');
+      this.root = await (await navigator.storage.getDirectory()).getDirectoryHandle('agent-results', {
+        create: true
+      });
+    } else this.root = await this.store.get('directory');
+  }
+  async useBrowserStorage() {
+    if ((await chrome.storage.local.get('file-mode'))['file-mode'] !== 'browser') await this.store.put(
+      'owned-files', {});
+    await chrome.storage.local.set({
+      'file-mode': 'browser'
+    });
+    await this.restore();
+  }
+  async file(path) {
+    const [dir, name] = await this.parent(path);
+    return (await dir.getFileHandle(name)).getFile();
   }
   async choose() {
+    assert(typeof showDirectoryPicker === 'function',
+      'Этот браузер не поддерживает выбор папки (File System Access API). Требуется другой способ сохранения файлов.'
+      );
     const candidate = await showDirectoryPicker({
       mode: 'readwrite',
       id: 'psy-agent-project'
@@ -23,18 +45,28 @@ export class ProjectFiles {
       if (e.name !== 'NotFoundError' && e.name !== 'SyntaxError') throw e;
     }
     const previous = await this.store.get('directory');
-    if (!previous || !await previous.isSameEntry(candidate)) await this.store.put('owned-files', {});
+    if (this.mode !== 'directory' || !previous || !await previous.isSameEntry(candidate)) await this.store
+      .put('owned-files', {});
+    this.mode = 'directory';
+    await chrome.storage.local.set({
+      'file-mode': 'directory'
+    });
     this.root = candidate;
     await this.store.put('directory', this.root);
     await this.authorize();
   }
   async authorize() {
-    assert(this.root, 'Выберите папку');
+    assert(this.root, 'Выберите папку или внутреннее хранилище');
+    if (this.mode === 'browser') return;
     assert(await this.root.requestPermission({
       mode: 'readwrite'
     }) === 'granted', 'Нет разрешения на папку');
   }
   async permission() {
+    if (this.mode === 'browser') {
+      assert(this.root, 'Внутреннее хранилище недоступно');
+      return;
+    }
     assert(this.root && await this.root.queryPermission({
       mode: 'readwrite'
     }) === 'granted', 'Нажмите «Доступ к папке», чтобы восстановить разрешение');

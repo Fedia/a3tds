@@ -1,9 +1,11 @@
 {
   "date": "2026-11-01",
-  "environment": "Chromium 154 Linux, HTTP harness + real CDP transport, not an installed extension",
-  "passed": 13,
+  "version": "0.2.0",
+  "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
+  "passed": 14,
   "failed": 0,
   "realDeepSeekVerified": false,
+  "titaniumDeviceVerified": false,
   "extensionLoadVerified": false,
   "results": [
     {
@@ -28,6 +30,10 @@
     },
     {
       "name": "CDP / BrowserTools: открытие, snapshot, текст/ссылки/таблицы, stale DOM, ввод, навигация",
+      "ok": true
+    },
+    {
+      "name": "Совместимый режим: snapshot, касание/клик, ввод и устаревшие ссылки без CDP",
       "ok": true
     },
     {

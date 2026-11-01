@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-01",
+  "version": "0.2.0",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "touchEmulation": true,
+  "chromeAPITransport": "Playwright bridge, not installed extension",
+  "titaniumDeviceVerified": false,
+  "passed": [
+    "settings closed while task executes in chat iframe",
+    "Python sum equals 6",
+    "OPFS result persists",
+    "downloaded JSON verified",
+    "untrusted executor command denied",
+    "stop via chat toggle",
+    "touch send and Enter intercepted",
+    "normal chat when disabled",
+    "four-touch binding wizard",
+    "touch cancellation",
+    "programmatic adapter send passes through",
+    "settings no horizontal overflow"
+  ]
+}

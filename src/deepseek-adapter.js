@@ -3,19 +3,50 @@ import {
   sleep,
   timeout
 } from './util.js';
-/** Selectors are configured by the user from the live UI, never assumed current. */
+/** Automatic semantic discovery; explicit selectors remain an optional developer override. */
 export function deepseekDOM(action, config, payload) {
+  config ||= {};
+  const automatic = !config.input;
+  const visible = e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+  const label = e => [e.getAttribute('aria-label'), e.getAttribute('title'), e.textContent].filter(Boolean)
+    .join(' ').trim();
+  const all = (selector, root = document) => [...root.querySelectorAll(selector)].filter(visible);
+  const unique = nodes => nodes.length === 1 ? nodes[0] : null;
+  const buttons = all('button,[role="button"]');
+  const named = re => buttons.filter(e => re.test(label(e)));
+  // These are semantic conventions, not claims about the current DeepSeek DOM.
+  const assistantNodes = () => all(
+    '[data-message-author-role="assistant"],[data-role="assistant"],[data-author="assistant"]').filter(e =>
+    !e.parentElement.closest(
+      '[data-message-author-role="assistant"],[data-role="assistant"],[data-author="assistant"]'));
+  const composer = unique(all('textarea,[contenteditable="true"][role="textbox"]'));
+  const alerts = all('[role="alert"],[role="dialog"],[aria-live="assertive"]');
+  const notice = re => alerts.find(e => re.test(label(e)));
+  const detected = {
+    input: composer,
+    send: unique(named(/^(send|send message|отправить|отправить сообщение|发送)(\s|$)/i)),
+    stop: unique(named(/stop (generating|generation|response)|остановить|停止生成/i)),
+    login: !composer && (unique(named(/^(log in|sign in|войти|登录)$/i)) || document.querySelector(
+      'input[type="password"]')),
+    challenge: notice(/captcha|verify.*human|провер.*человек|подтверд.*человек|人机验证/i) || all(
+      'iframe[title]').find(e => /captcha|challenge|verification/i.test(e.title)),
+    error: notice(
+      /rate limit|too many requests|try again later|service unavailable|слишком много|лимит|попробуйте позже|服务繁忙/i
+      )
+  };
   const one = k => {
-    if (!config[k]) return null;
+    if (automatic) return detected[k] || null;
+    if (!config[k]) return detected[k] || null;
     const nodes = [...document.querySelectorAll(config[k])].filter(e => e.getClientRects().length);
     return nodes.at(-1) || null;
   };
-  const responses = () => config.response ? [...document.querySelectorAll(config.response)].map(e => {
+  const responses = () => (automatic ? assistantNodes() : config.response ? [...document.querySelectorAll(
+    config.response)] : []).map(e => {
     const c = e.cloneNode(true);
     if (config.complete) c.querySelectorAll(config.complete).forEach(x => x.remove());
     c.querySelectorAll('button').forEach(x => x.remove());
     return c.textContent.trim();
-  }) : [];
+  });
   const inspect = () => {
     const error = one('error'),
       login = one('login'),
@@ -25,9 +56,12 @@ export function deepseekDOM(action, config, payload) {
       input = one('input');
     const answers = responses();
     const last = answers.at(-1) || '';
-    const responseNodes = config.response ? [...document.querySelectorAll(config.response)] : [];
+    const responseNodes = automatic ? assistantNodes() : config.response ? [...document.querySelectorAll(
+      config.response)] : [];
     const latest = responseNodes.at(-1);
-    const complete = latest && config.complete ? latest.querySelector(config.complete) : null;
+    const complete = automatic ? latest && all('button,[role=button]', latest).find(e =>
+        /copy|копировать|复制|regenerate|повторить ответ/i.test(label(e))) : latest && config.complete ?
+      latest.querySelector(config.complete) : null;
     let status = challenge ? 'user-required' : login ? 'login-required' : error ? 'service-error' : stop ?
       'generating' : input && send && !input.disabled ? 'ready' : 'user-required';
     return {
@@ -40,7 +74,8 @@ export function deepseekDOM(action, config, payload) {
       send: !!send,
       reason: challenge ? 'CAPTCHA или участие пользователя' : login ? 'Требуется вход' : error ?
         'Ошибка/ограничение сервиса' : status === 'user-required' ?
-        'Не удалось определить состояние интерфейса' : '',
+        'Не удалось уверенно распознать чат. Откройте вкладку DeepSeek, проверьте вход и доступность чата, затем подключите снова.' :
+        '',
       diagnostic: {
         inputCount: config.input ? document.querySelectorAll(config.input).length : 0,
         responseCount: answers.length,
@@ -49,6 +84,20 @@ export function deepseekDOM(action, config, payload) {
     };
   };
   if (action === 'inspect') return inspect();
+  if (action === 'clear-task') {
+    const input = one('input');
+    const current = input?.value ?? input?.innerText;
+    if (!input || current !== payload) throw new Error('Черновик изменился. Отправьте задачу снова.');
+    if (input.isContentEditable) input.textContent = '';
+    else Object.getOwnPropertyDescriptor(input instanceof HTMLTextAreaElement ? HTMLTextAreaElement
+      .prototype : HTMLInputElement.prototype, 'value').set.call(input, '');
+    input.dispatchEvent(new Event('input', {
+      bubbles: true
+    }));
+    return {
+      cleared: true
+    };
+  }
   if (action === 'send') {
     const before = inspect();
     if (before.status !== 'ready') throw new Error(before.reason || 'Чат не готов');
@@ -89,16 +138,11 @@ export class DeepSeekAdapter {
     this.store = store;
     this.abort = false;
   }
-  async connect(tabId, config) {
+  async connect(tabId, config = {}) {
     const tab = await chrome.tabs.get(tabId);
     assert(new URL(tab.url).origin === 'https://chat.deepseek.com',
       'Нужна отдельная вкладка chat.deepseek.com');
-    for (const k of ['input', 'send', 'response', 'stop', 'complete', 'login', 'challenge', 'error'])
-      assert(typeof config[k] === 'string' && config[k].length < 1000, 'Укажите CSS-селектор ' + k);
-    assert(['input', 'send', 'response', 'stop', 'complete', 'login', 'challenge', 'error'].every(k =>
-        config[k].trim()),
-      'Все селекторы обязательны; если маркер отсутствует в текущем UI, задайте проверенный селектор, а не пустую строку'
-    );
+    config ||= {};
     this.tabId = tabId;
     this.config = config;
     await this.store.put('deepseek', {
@@ -113,13 +157,13 @@ export class DeepSeekAdapter {
   async restore() {
     const x = await this.store.get('deepseek');
     if (x) {
-      this.config = x.config;
+      this.config = {}; // Migrate old installations to automatic discovery.
       const bound = await chrome.storage.session.get('deepseek-bound-tab');
       if (bound['deepseek-bound-tab'] === x.tabId) this.tabId = x.tabId;
     }
   }
   async dom(action, payload) {
-    assert(this.tabId && this.config, 'Подключите DeepSeek и настройте селекторы');
+    assert(this.tabId && this.config, 'Подключите DeepSeek');
     const tab = await chrome.tabs.get(this.tabId);
     assert(new URL(tab.url).origin === 'https://chat.deepseek.com', 'Вкладка модели сменила адрес');
     const [r] = await timeout(chrome.scripting.executeScript({
@@ -162,7 +206,10 @@ export class DeepSeekAdapter {
     assert(!this.abort, 'Отправка отменена до нажатия кнопки');
     await this.dom('submit');
     this.onStatus?.('waiting-response');
-    return this.waitAnswer(before);
+    return this.waitAnswer({
+      ...before,
+      sentPrompt: prompt
+    });
   }
   async waitAnswer(before) {
     let seenGeneration = false,
@@ -176,7 +223,7 @@ export class DeepSeekAdapter {
       if (['login-required', 'service-error', 'user-required'].includes(s.status)) throw new Error(s
         .reason || s.status);
       if (s.status === 'generating') seenGeneration = true;
-      const changed = s.count > before.count && s.answer;
+      const changed = s.count > before.count && s.answer && s.answer.trim() !== before.sentPrompt?.trim();
       stable = changed && s.answer === last ? stable + 1 : 0;
       last = s.answer;
       // Stability is supplementary; a completion marker, absent stop, and enabled composer are mandatory.

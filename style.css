@@ -133,3 +133,16 @@ a {
     padding: 0 10px
   }
 }
+
+/* Settings remain usable without a mouse or a desktop layout viewport. */
+button, select, summary { min-height: 44px; touch-action: manipulation; }
+select { max-width: 100%; padding: 8px; }
+input[type=checkbox] { width: 22px; height: 22px; vertical-align: middle; }
+@media (max-width: 600px) {
+  main { margin: 12px auto; padding: 0 max(10px, env(safe-area-inset-left)); }
+  section { padding: 14px; }
+  h1 { font-size: 26px; }
+  select { display: block; width: 100%; }
+  button { max-width: 100%; white-space: normal; }
+}
+#files button { overflow-wrap: anywhere; text-align: left; }

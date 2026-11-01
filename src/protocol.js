@@ -103,6 +103,7 @@ export function parseCommand(text) {
   }
   return c;
 }
-export const protocolHelp = () => JSON.stringify(Object.fromEntries(Object.entries(TOOLS).map(([k, v]) => [k,
+export const protocolHelp = () => JSON.stringify(Object.fromEntries(Object.entries(TOOLS).filter(([k]) => !k
+  .startsWith('corpus.') && k !== 'analysis.save').map(([k, v]) => [k,
   Object.keys(v)
 ])));
