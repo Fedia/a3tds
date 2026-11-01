@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Агент для DeepSeek",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "minimum_chrome_version": "120",
   "description": "Локальный браузерный агент с веб-чатом DeepSeek и Python",
   "permissions": [
@@ -43,7 +43,8 @@
     {
       "resources": [
         "executor.html",
-        "src/chat-dom.js"
+        "src/chat-dom.js",
+        "src/final-view.js"
       ],
       "matches": [
         "https://chat.deepseek.com/*"

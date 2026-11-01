@@ -52,7 +52,9 @@
   const load = async () => {
     config = (await chrome.storage.local.get('chat-bindings'))['chat-bindings'] || {};
   };
-  load();
+  const { mountFinalAnswers } = await import(chrome.runtime.getURL('src/final-view.js'));
+  await load();
+  mountFinalAnswers(() => deepseekDOM('answer-elements', config));
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes['chat-bindings']) config = changes['chat-bindings'].newValue || {};
   });

@@ -291,7 +291,16 @@ export class BrowserTools {
   }
   async execute(tool, a) {
     const op = tool.split('.')[1];
-    if (op === 'open') return this.open(a.url);
+    if (op === 'open') {
+      const opened = await this.open(a.url);
+      try {
+        return { ...opened, page: await this.run(opened.tabId, 'snapshot') };
+      } catch (e) {
+        // Navigation succeeded: report failed reading separately, never reopen blindly.
+        return { ...opened, page: null, readError: { code: 'SNAPSHOT_FAILED', message: e.message },
+          next: 'Вкладка открыта, но текст не прочитан. Используй browser.snapshot или browser.extract.' };
+      }
+    }
     if (op === 'click' || op === 'type') {
       let info = await this.run(a.tabId, 'locate', a);
       if (op === 'type') assert(['INPUT', 'TEXTAREA'].includes(info.tag) && (!info.type || ['text',

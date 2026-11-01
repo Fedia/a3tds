@@ -84,6 +84,8 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   assert summary.get('status')=='completed',await chat.evaluate('window.lastAlert')
   assert 'python-result-py.json' in summary['files']
   assert await chat.locator('.answer').count()==2
+  await chat.wait_for_selector('.psy-agent-final')
+  assert await chat.locator('.psy-agent-final').inner_text() == 'Ответ агента\nСумма равна 6'
   frame=next(f for f in chat.frames if f.url==EXT+'executor.html')
   result=await frame.evaluate('''async()=>{const d=await(await navigator.storage.getDirectory()).getDirectoryHandle('agent-results');return JSON.parse(await(await(await d.getFileHandle('python-result-py.json')).getFile()).text())}''')
   assert result['result']['sum']==6

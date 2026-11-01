@@ -117,12 +117,11 @@ test('CDP / BrowserTools: открытие, snapshot, текст/ссылки/т
     id: 'browser-test'
   };
   browser = new BrowserTools(state, async () => {}, async () => {});
-  const t = await browser.open(chrome.runtime.getURL('fixtures/article.html'), {
-    fixture: true
-  });
-  const s = await browser.execute('browser.snapshot', {
-    tabId: t.tabId
-  });
+  const open = browser.open.bind(browser);
+  browser.open = url => open(url, { fixture: true });
+  const t = await browser.execute('browser.open', { url: chrome.runtime.getURL('fixtures/article.html') });
+  const s = t.page;
+  assert(s?.snapshot && s.url, 'Открытие сразу возвращает снимок страницы');
   assert(s.text.includes('Социальная поддержка'), 'Извлечение');
   assert((await browser.run(t.tabId, 'extract', {
     kind: 'tables'
@@ -159,6 +158,12 @@ test('CDP / BrowserTools: открытие, snapshot, текст/ссылки/т
   });
   await sleep(200);
   assert((await browser.run(t.tabId, 'snapshot')).title === 'Страница 2', 'Навигация');
+  let opens = 0;
+  browser.open = async () => { opens++; return { tabId: t.tabId, url: 'https://example.org' }; };
+  browser.run = async () => { throw new Error('Read denied'); };
+  const failedRead = await browser.execute('browser.open', { url: 'https://example.org' });
+  assert(opens === 1 && failedRead.page === null && failedRead.readError.code === 'SNAPSHOT_FAILED',
+    'Ошибка чтения не повторяет уже выполненное открытие');
   await browser.detach();
   for (const t of state.tabs) await chrome.tabs.remove(t.id);
 });

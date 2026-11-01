@@ -132,6 +132,15 @@ export function deepseekDOM(action, config, payload) {
       }
     };
   };
+  if (action === 'answer-elements') {
+    const nodes = responseNodes();
+    const ready = inspect().status === 'ready';
+    return nodes.map((node, i) => ({
+      source: node.querySelector('.ds-assistant-message-main-content') || node,
+      raw: responses([node])[0],
+      complete: !!completion(node) && (i < nodes.length - 1 || ready)
+    }));
+  }
   if (action === 'inspect') return inspect();
   if (action === 'clear-task') {
     const input = one('input');
