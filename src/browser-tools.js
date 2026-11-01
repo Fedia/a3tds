@@ -122,7 +122,13 @@ export function pageOperation(op, args) {
       tag: e.tagName,
       type: e.getAttribute('type'),
       href: e.tagName === 'A' ? e.href : null,
-      label: (e.textContent || e.getAttribute('aria-label') || '').slice(0, 120)
+      label: (e.textContent || e.getAttribute('aria-label') || '').slice(0, 120),
+      navigation: e.tagName === 'A' && !!e.href && !e.hasAttribute('download') && !e.getAttribute('onclick') && !e.getAttribute('role'),
+      search: e.matches('input[type=search],[role=searchbox]') ||
+        e.tagName === 'INPUT' && /^(q|query|search)$|search|поиск/i.test([e.name,e.placeholder,e.getAttribute('aria-label')].join(' ')) ||
+        !!e.closest('form[role=search],[role=search]'),
+      disclosure: e.hasAttribute('aria-expanded') && !e.closest('form'),
+      formMethod: (e.form || e.closest('form'))?.method || null
     };
   }
   if (op === 'scroll') {
@@ -257,15 +263,7 @@ export class BrowserTools {
     assert(this.state.tabs.length < 5, 'Лимит пяти рабочих страниц');
     if (!fixture) {
       safeURL(url);
-      const explicit = (this.state.task || '').match(/https?:\/\/[^\s<>"«»]+/g) || [];
-      if (!explicit.some(x => x.replace(/[.,;)]$/, '') === url || x.replace(/[.,;)]$/, '') === url.replace(
-          /\/$/, ''))) await this.approve({
-        tool: 'browser.open',
-        args: {
-          url
-        },
-        reason: 'URL не указан явно в задаче. Разрешить открытие?'
-      });
+
     }
     const tab = await chrome.tabs.create({
       url,
@@ -302,17 +300,28 @@ export class BrowserTools {
       }
     }
     if (op === 'click' || op === 'type') {
-      let info = await this.run(a.tabId, 'locate', a);
+      let info;
+      try { info = await this.run(a.tabId, 'locate', a); }
+      catch (e) { e.definite = true; throw e; }
+      try {
       if (op === 'type') assert(['INPUT', 'TEXTAREA'].includes(info.tag) && (!info.type || ['text',
         'search', 'email', 'url', 'tel'
       ].includes(info.type)), 'Ввод разрешён только в текстовые поля');
-      await this.approve({
-        tool,
-        args: a,
-        target: info,
-        reason: 'Взаимодействие может отправить данные или изменить сайт. Подтвердите конкретное действие.'
-      });
-      info = await this.run(a.tabId, 'locate', a);
+      } catch (e) { e.definite = true; throw e; }
+      // Read-only navigation/search controls run without approval dialogs.
+      // Arbitrary site mutations are unavailable, rather than delegated to untrusted page text.
+      const fixture = (await this.check(a.tabId)).url.startsWith(chrome.runtime.getURL('fixtures/'));
+      const allowed = fixture || (op === 'type' ? info.search && info.formMethod !== 'post' :
+        info.navigation || info.disclosure || info.search && info.formMethod !== 'post');
+      if (!allowed) {
+        const error = new Error('Это действие может изменить данные сайта. Используй чтение страницы, публичную ссылку или поиск.');
+        error.definite = true;
+        throw error;
+      }
+      try {
+        if (info.href && !fixture) safeURL(info.href);
+        info = await this.run(a.tabId, 'locate', a);
+      } catch (e) { e.definite = true; throw e; }
       if (this.useScripting()) return this.run(a.tabId, 'interact', {
         ...a,
         action: op

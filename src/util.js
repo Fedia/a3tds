@@ -13,7 +13,10 @@ export function safeURL(value) {
   assert(['http:', 'https:'].includes(u.protocol) && !u.username && !u.password,
     'Разрешены только HTTP(S) без учётных данных');
   assert(u.hostname !== 'chat.deepseek.com', 'Вкладка модели исключена из рабочих вкладок');
-  assert(!u.search && !u.hash, 'MVP: используйте URL без параметров и фрагментов (защита секретов)');
+  for (const [key] of [...u.searchParams, ...new URLSearchParams(u.hash.slice(1))]) {
+    assert(!/^(access_token|refresh_token|token|api[_-]?key|password|passwd|session(?:id)?|authorization)$/i.test(key),
+      'Ссылка содержит данные авторизации; выбери публичную страницу без них');
+  }
   return u.href;
 }
 export const sleep = ms => new Promise(r => setTimeout(r, ms));

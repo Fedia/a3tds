@@ -66,7 +66,8 @@ test('Пути: запрет выхода, Windows-имён, абсолютны�
     await fail(() => pathParts(p));
   assert(pathParts('results/coding.csv').length === 2, 'Нормальный путь');
 });
-test('URL: запрет модели, схем и учётных данных', async () => {
+test('URL: параметры поиска разрешены; схемы и секреты запрещены', async () => {
+  assert(safeURL('https://example.org/search?q=hello&page=2#results').includes('q=hello'), 'Параметры и фрагменты допустимы');
   for (const u of ['chrome://settings', 'javascript:alert(1)', 'https://chat.deepseek.com/',
       'https://u:p@example.org', 'https://example.org/?token=secret'
     ]) await fail(() => safeURL(u));
@@ -212,6 +213,25 @@ test('Совместимый режим: snapshot, касание/клик, вв
     await tools.detach();
     await chrome.tabs.remove(tab.tabId);
   }
+});
+test('Автоматические действия: ссылки и поиск без вопросов; опасные кнопки отклоняются до клика', async () => {
+  const tools = new BrowserTools({ tabs: [] }, async () => {}, async () => { throw new Error('Не должно быть вопросов'); });
+  tools.transport = 'scripting';
+  tools.check = async () => ({ url: 'https://example.org/search?q=test' });
+  let info = { tag: 'A', href: 'https://example.org/?page=2', navigation: true };
+  let clicks = 0;
+  tools.run = async (id, op) => {
+    if (op === 'locate') return info;
+    if (op === 'interact') { clicks++; return { performed: 'click' }; }
+  };
+  await tools.execute('browser.click', { tabId: 1 });
+  info = { tag: 'INPUT', type: 'search', search: true, formMethod: 'get' };
+  await tools.execute('browser.type', { tabId: 1, text: 'Погода в Москве' });
+  info = { tag: 'BUTTON', label: 'Удалить' };
+  let rejected = false;
+  try { await tools.execute('browser.click', { tabId: 1 }); }
+  catch (e) { rejected = e.definite === true; }
+  assert(rejected && clicks === 2, 'Опасное действие не отправлено и не требует согласования');
 });
 test('DOM-адаптер: вставка, отправка, генерация, завершение на chat fixture', async () => {
   const tab = await chrome.tabs.create({

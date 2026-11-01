@@ -113,12 +113,6 @@ action('#reconcile', () => command('reconcile', {
 action('#recover-send', () => command('recover-send'));
 action('#resume', () => command('resume'));
 action('#reset-tabs', () => command('reset-tabs'));
-action('#cancel-send', async () => {
-  assert(confirm(
-    'Вы проверили исходный чат и уверены, что запрос НЕ был отправлен? Очистите поле перед продолжением.'
-    ), 'Отменено');
-  await command('cancel-send');
-});
 async function diagnostics() {
   const data = await command('status');
   const c = data.capabilities;

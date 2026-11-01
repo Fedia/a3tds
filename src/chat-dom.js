@@ -135,11 +135,15 @@ export function deepseekDOM(action, config, payload) {
   if (action === 'answer-elements') {
     const nodes = responseNodes();
     const ready = inspect().status === 'ready';
-    return nodes.map((node, i) => ({
+    const answers = nodes.map((node, i) => ({
       source: node.querySelector('.ds-assistant-message-main-content') || node,
       raw: responses([node])[0],
       complete: !!completion(node) && (i < nodes.length - 1 || ready)
     }));
+    const context = all('.ds-message').filter(node => !node.querySelector('.ds-assistant-message-main-content'))
+      .filter(node => /^(Режим браузерного агента\.|Исправь предыдущий JSON\.)/.test(node.textContent.trim()))
+      .map(source => ({ source, raw: source.textContent.trim(), complete: true, context: true }));
+    return [...answers, ...context];
   }
   if (action === 'inspect') return inspect();
   if (action === 'clear-task') {

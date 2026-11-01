@@ -48,13 +48,18 @@
       'Встроенный исполнитель недоступен. Обновите DeepSeek; если ошибка повторяется, откройте диагностику настроек.'
     );
   }
+  const notice = document.createElement('span');
+  notice.setAttribute('role', 'status');
+  notice.style.cssText = 'display:none;max-width:260px;font-size:13px';
+  bar.append(notice);
+  const showNotice = text => { notice.textContent = text; notice.style.display = text ? 'block' : 'none'; };
   const send = message => chrome.runtime.sendMessage(message);
   const load = async () => {
     config = (await chrome.storage.local.get('chat-bindings'))['chat-bindings'] || {};
   };
   const { mountFinalAnswers } = await import(chrome.runtime.getURL('src/final-view.js'));
   await load();
-  mountFinalAnswers(() => deepseekDOM('answer-elements', config));
+  let unmountView = mountFinalAnswers(() => deepseekDOM('answer-elements', config));
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes['chat-bindings']) config = changes['chat-bindings'].newValue || {};
   });
@@ -62,6 +67,7 @@
     type: 'open-workspace'
   });
   toggle.onchange = async () => {
+    showNotice('');
     enabled = toggle.checked;
     if (!enabled) {
       await send({
@@ -80,7 +86,7 @@
     } catch (e) {
       enabled = false;
       toggle.checked = false;
-      alert(e.message);
+      showNotice(e.message);
     }
   };
   const elements = () => deepseekDOM('elements', config);
@@ -90,6 +96,7 @@
     const element = input();
     const task = element?.value ?? element?.innerText ?? '';
     if (!task.trim()) return;
+    showNotice('');
     busy = true;
     try {
       const result = await send({
@@ -98,7 +105,7 @@
       });
       if (!result?.ok) throw new Error(result?.error || 'Задача не принята. Черновик сохранён.');
     } catch (e) {
-      alert(e.message);
+      showNotice(e.message);
     } finally {
       busy = false;
     }
@@ -121,12 +128,12 @@
     if (sender.id !== chrome.runtime.id) return;
     if (message.type === 'chat-approval') {
       reply({
-        approved: confirm(message.text)
+        approved: false
       });
       return;
     }
     if (message.type === 'chat-notice') {
-      alert(message.text);
+      showNotice(message.text);
       reply({
         ok: true
       });
@@ -147,6 +154,7 @@
     enabled = false;
     toggle.checked = false;
     picking = true;
+    unmountView();
     const result = {};
     let response;
     const hint = document.createElement('div');
@@ -230,10 +238,11 @@
         'chat-bindings': result
       });
       config = result;
-      alert('Привязка сохранена. Включите режим агента и напишите задачу в чат.');
+      showNotice('Привязка сохранена. Можно запускать агента.');
     } finally {
       hint.remove();
       picking = false;
+      unmountView = mountFinalAnswers(() => deepseekDOM('answer-elements', config));
     }
   }
 })();

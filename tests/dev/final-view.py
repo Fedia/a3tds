@@ -16,6 +16,7 @@ async def main():
   assert await page.locator('.psy-agent-final').count()==1
   assert await page.locator('.psy-agent-final > div').text_content()==expected
   assert await page.evaluate("deepseekDOM('inspect',{}).answer === originalAnswer")
+  assert await page.evaluate(r"""deepseekDOM('answer-elements',{}).filter(a=>a.context || /\"tool\"\s*:/.test(a.raw)).every(a=>getComputedStyle(a.source).opacity==='0')""")
   # Re-mounting the view and reloading history must not duplicate the final text.
   await page.evaluate("() => { unmount(); window.unmount=mountFinalAnswers(()=>deepseekDOM('answer-elements',{})); }")
   await page.wait_for_timeout(300);assert await page.locator('.psy-agent-final').count()==1

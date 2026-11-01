@@ -73,7 +73,7 @@ async function restoreController() {
   }, () => controller.save(), async detail => {
     const result = await chrome.tabs.sendMessage(tabId, {
       type: 'chat-approval',
-      text: 'Разрешить действие агента?\n' + JSON.stringify(detail, null, 2)
+      text: detail.reason || 'Действие недоступно в автоматическом режиме'
     }, {
       frameId: 0
     });
@@ -105,8 +105,7 @@ async function runLocked(message, respond) {
       await restoreController();
       assert(generation === cancellation, 'Запуск отменён');
       if (message.command === 'chat-task') {
-        assert(!controller.s?.pending && !controller.s?.outbound,
-          'Есть неопределённое действие. Проверьте его в настройках восстановления');
+        // A new task archives uncertainty; it never resumes or retries the old command.
         assert(typeof message.task === 'string' && message.task.trim() && message.task.length <=
           20000, 'Задача пуста или слишком длинная');
         if (controller.s) await store.put('archive-' + controller.s.id, controller.s);
@@ -122,10 +121,6 @@ async function runLocked(message, respond) {
         controller.s.modelTabId = tabId;
         if (message.command === 'reconcile') await controller.reconcileCommand(message.note);
         if (message.command === 'recover-send') await controller.reconcileSend();
-        if (message.command === 'cancel-send') {
-          controller.s.outbound = null;
-          await controller.log('send-manually-reset');
-        }
         if (message.command === 'reset-tabs') {
           controller.s.tabs = [];
           await controller.save();

@@ -51,7 +51,7 @@ async def main():
   await context.expose_binding('bridge',bridge)
   script='''window.listeners=[];const evt={addListener(){}};
 window.chrome={runtime:{id:'test-extension',getURL:p=>EXT+p,onMessage:{addListener:f=>listeners.push(f)},sendMessage:m=>bridge('message',m)},action:{onClicked:evt},permissions:{request:()=>bridge('permission',{})},storage:{local:{get:k=>bridge('get-storage',k),set:v=>bridge('set-storage',v)},session:{get:k=>bridge('get-storage',k),set:v=>bridge('set-storage',v)},onChanged:evt},tabs:{getCurrent:()=>bridge('current',null),get:id=>bridge('get-tab',id),query:q=>bridge('query',q),update:id=>bridge('update',id),onRemoved:evt,sendMessage:(id,message)=>bridge('tab-message',{id,message})},scripting:{executeScript:a=>bridge('script',{id:a.target.tabId,source:a.func.toString(),args:a.args})}};
-const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=function(options){const r=attach.call(this,options);window.testShadow=r;return r};window.alert=text=>{window.lastAlert=text};window.confirm=()=>true;
+const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=function(options){const r=attach.call(this,options);window.testShadow=r;return r};window.alert=text=>{window.lastAlert=text};window.confirm=()=>{throw new Error('Unexpected confirmation')};
 '''.replace('EXT',json.dumps(EXT))
   await context.add_init_script(script)
   # Empty page hosts the actual service worker source with emulated Chrome API transport.
@@ -75,6 +75,14 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await chat.evaluate("testShadow.querySelector('input').click()")
   await chat.wait_for_timeout(500)
   assert await chat.evaluate("testShadow.querySelector('input').checked"),await chat.evaluate('window.lastAlert')
+  frame=next(f for f in chat.frames if f.url==EXT+'executor.html')
+  await frame.evaluate("""async()=>{
+    const {StateStore}=await import('./src/state-store.js'); const store=await new StateStore().init();
+    const old=StateStore.fresh('Старая остановленная задача'); old.status='stopped';
+    old.pending={command:{id:'old-command',tool:'files.write',args:{path:'old.txt',text:'old'},description:'old'}};
+    old.outbound={phase:'send-uncertain',prompt:'old'};
+    window.oldTaskId=old.id; await store.put('task',old);
+  }""")
   await chat.locator('#composer').fill('Посчитай сумму 1, 2 и 3 в Python')
   await chat.locator('#send').tap()
   for i in range(100):
@@ -83,6 +91,11 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   summary=shared.get('summary',{});print('SUMMARY',summary,flush=True)
   assert summary.get('status')=='completed',await chat.evaluate('window.lastAlert')
   assert 'python-result-py.json' in summary['files']
+  assert await frame.evaluate("""async()=>{
+    const {StateStore}=await import('./src/state-store.js'); const store=await new StateStore().init();
+    const old=await store.get('archive-'+oldTaskId); const current=await store.get('task');
+    return !!old.pending && !!old.outbound && current.id!==old.id && !current.commands['old-command'];
+  }""")
   assert await chat.locator('.answer').count()==2
   await chat.wait_for_selector('.psy-agent-final')
   assert await chat.locator('.psy-agent-final').inner_text() == 'Ответ агента\nСумма равна 6'
