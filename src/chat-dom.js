@@ -99,6 +99,9 @@ export function deepseekDOM(action, config, payload) {
     input: one('input'),
     send: one('send')
   };
+  const userNodes = () => all('.ds-message,[data-message-author-role="user"],[data-role="user"]')
+    .filter(e => !e.querySelector('.ds-assistant-message-main-content') &&
+      !e.matches('[data-message-author-role="assistant"],[data-role="assistant"]'));
   const inspect = () => {
     const error = one('error'),
       login = one('login'),
@@ -117,6 +120,7 @@ export function deepseekDOM(action, config, payload) {
       status,
       answer: last,
       count: answers.length,
+      userCount: userNodes().length,
       completion: !!complete && !!complete.getClientRects().length,
       stop: !!stop,
       input: !!input,
@@ -146,6 +150,14 @@ export function deepseekDOM(action, config, payload) {
     return [...answers, ...context];
   }
   if (action === 'inspect') return inspect();
+  if (action === 'delivery') {
+    const input = one('input');
+    const draft = (input?.value ?? input?.innerText ?? '');
+    const users = userNodes();
+    const same = e => e.textContent.trim() === payload.trim();
+    return { draft: draft === payload ? 'exact' : draft.trim() ? 'other' : 'empty',
+      posted: users.some(same), latest: users.length > 0 && same(users.at(-1)), userCount: users.length };
+  }
   if (action === 'clear-task') {
     const input = one('input');
     const current = input?.value ?? input?.innerText;
@@ -188,7 +200,7 @@ export function deepseekDOM(action, config, payload) {
   }
   if (action === 'submit') {
     const send = one('send');
-    if (!send || disabled(send)) throw new Error('Кнопка отправки недоступна');
+    if (!send || disabled(send)) return { attempted: false, reason: 'Чат пока не разрешил отправку' };
     send.click();
     return {
       attempted: true

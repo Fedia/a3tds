@@ -59,7 +59,7 @@ async def main():
     adapter.dom=async(action,payload)=>deepseekDOM(action,{},payload);
     const journal=[];
     const answer=await adapter.exchange('Synthetic lifecycle prompt',async event=>journal.push(event.phase));
-    return answer===next && journal.join(',')==='prepared,send-uncertain';
+    return answer===next && journal.join(',')==='prepared,inserted,send-uncertain';
   }""")
   print('PASS: observed DOM, automatic composer/send/answer/copy, disabled div, insertion and click, unknown icon blocked, toolbar completion required; network blocked')
   await browser.close()

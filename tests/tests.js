@@ -271,7 +271,7 @@ test('DOM-адаптер: вставка, отправка, генерация, 
   const journal = [];
   const answer = await adapter.exchange('test lifecycle', async entry => journal.push(entry));
   assert(answer.includes('fixture-final') && journal.map(x => x.phase).join(',') ===
-    'prepared,send-uncertain', 'Адаптер: полный цикл и журнал отправки');
+    'prepared,inserted,send-uncertain', 'Адаптер: полный цикл и журнал отправки');
   let sends = 0;
   adapter.dom = async action => {
     if (action === 'inspect') return {
@@ -445,7 +445,7 @@ test('Пауза не выдаёт новые команды; stop отменя�
   assert(cc.s.status === 'stopped' && !cc.s.commands.never, 'Остановка');
 });
 
-test('Исправление JSON ограничено; неопределённая команда блокирует повтор', async () => {
+test('Исправление JSON ограничено; прерванная команда проверяется без ручного сброса', async () => {
   let requests = 0;
   const b = new BrowserTools({
     tabs: []
@@ -473,9 +473,55 @@ test('Исправление JSON ограничено; неопределённ
     }),
     started: Date.now()
   };
-  await fail(() => cc.start());
-  await cc.reconcileCommand('Проверено: файл отсутствует, повтор этой команды запрещён');
-  assert(cc.s.commands.uncertain.result.status === 'error' && !cc.s.pending, 'Ручная сверка');
+  await cc.start();
+  assert(cc.s.commands.uncertain.result.status === 'error' && !cc.s.pending, 'Автоматическая сверка без повторного выполнения');
+});
+
+test('Восстановление записи: проверка хеша, без перезаписи и повторного инструмента', async () => {
+  const cc = new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:{cancel(){}}});
+  await cc.create('recovery');
+  const cmd = command('verified-write','files.write',{path:'recover.txt',text:'saved'});
+  const saved = await files.write(cmd.args.path,cmd.args.text,{operationId:cc.s.id+':'+cmd.id});
+  cc.s.pending={command:cmd}; await cc.recoverPending();
+  assert(cc.s.last.status==='ok' && cc.s.last.data.path===saved.path && !cc.s.pending, 'Файл подтверждён чтением хеша');
+  const changed=command('changed','files.write',{path:'changed.txt',text:'expected'});
+  const output=await files.write(changed.args.path,changed.args.text,{operationId:cc.s.id+':'+changed.id});
+  await files.write(output.path,'different',{owned:true});
+  cc.s.pending={command:changed}; await cc.recoverPending();
+  assert(cc.s.last.status==='error' && (await files.read(output.path)).text==='different', 'Несовпадение не перезаписывается и не блокирует цикл');
+});
+test('Восстановление вкладки по commandId; неизвестный клик закрыт для повторов', async () => {
+  const b={detach:async()=>{},check:async()=>({url:'https://example.org/'}),run:async()=>({text:'Observed'})};
+  const cc=new AgentController({store,files,browser:b,model:{},python:{cancel(){}}});
+  await cc.create('tabs');cc.s.tabs=[{id:7,commandId:'open'}];
+  cc.s.pending={command:command('open','browser.open',{url:'https://example.org/'})};
+  await cc.recoverPending();assert(cc.s.last.status==='ok' && cc.s.last.data.tabId===7, 'Открытая вкладка повторно не создаётся');
+  cc.s.pending={command:command('click','browser.click',{tabId:7,snapshot:'old',element:'e0'})};
+  await cc.recoverPending();assert(cc.s.last.status==='error' && cc.s.blockedInteractions.includes(7) && !cc.s.pending, 'Ошибка одного взаимодействия не блокирует чтение и цикл');
+});
+test('Ошибка Python возвращается модели; следующий шаг выполняется без ручного восстановления', async () => {
+  let calls=0, runs=0;
+  const cc=new AgentController({store,files,browser:{detach:async()=>{}},python:{cancel(){},async run(){runs++;throw new Error('Python timeout');}},
+    model:{async exchange(prompt){calls++;if(calls===1)return JSON.stringify(command('py-fail','python.run',{code:'result=1',data:{}}));
+      assert(prompt.includes('OUTCOME_UNCONFIRMED'),'Модель получает ошибку');
+      return JSON.stringify(command('done','task.finish',{summary:'Вычисление не удалось, использую доступные данные'}));}}});
+  await cc.create('python failure');await cc.start();
+  assert(cc.s.status==='completed' && runs===1 && calls===2 && !cc.s.pending,'Цикл продолжен, вычисление не повторено');
+});
+test('DeepSeek: восстановление отправленного ответа без повторного клика', async () => {
+  const adapter=new DeepSeekAdapter(store);let sends=0;
+  adapter.inspect=async()=>({status:'ready',answer:'new'});
+  adapter.dom=async action=>{if(action==='delivery')return {posted:true,latest:true,draft:'empty'};sends++;};
+  adapter.waitAnswer=async()=> 'recovered';
+  assert(await adapter.recoverExchange({phase:'send-uncertain',prompt:'prompt',before:{}},async()=>{})==='recovered' && sends===0,'Ответ уже отправленного запроса прочитан');
+  adapter.dom=async action=>{if(action==='delivery')return {posted:false,latest:false,draft:'exact'};sends++;};
+  await fail(()=>adapter.recoverExchange({phase:'send-uncertain',prompt:'prompt',before:{}},async()=>{}));
+  assert(sends===0,'Неопределённая отправка никогда не повторяется');
+  const phases=[];
+  adapter.dom=async action=>{if(action==='delivery')return {posted:false,latest:false,draft:'exact'};
+    assert(action==='submit','Повторная вставка в уже заполненное поле запрещена');sends++;return {attempted:true};};
+  await adapter.recoverExchange({phase:'inserted',prompt:'prompt',before:{}},async event=>phases.push(event.phase));
+  assert(sends===1 && phases.join(',')==='inserted,send-uncertain','Доказанно не отправленный черновик отправляется один раз');
 });
 
 export async function runTests() {

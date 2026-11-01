@@ -123,6 +123,25 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    if shared.get('summary',{}).get('status')=='stopped':break
    await asyncio.sleep(.2)
   assert shared['summary']['status']=='stopped'
+  old_id=await frame.evaluate("(async()=>{const {StateStore}=await import('./src/state-store.js');return (await (await new StateStore().init()).get('task')).id})()")
+  await chat.evaluate("""() => { document.querySelector('#send').onclick=()=>{
+    document.querySelector('#composer').value=''; const answer=document.createElement('div');
+    answer.className='answer';answer.dataset.messageAuthorRole='assistant';
+    answer.textContent=JSON.stringify({id:'resumed-finish',tool:'task.finish',args:{summary:'Продолжено без повторного вычисления'},description:'Готово'});
+    const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');answer.append(copy);
+    document.querySelector('#answers').append(answer);
+  }}""")
+  await chat.evaluate("testShadow.querySelector('input').click()")
+  await chat.locator('#composer').fill('продолжай');await chat.locator('#send').tap()
+  for i in range(100):
+   if shared.get('summary',{}).get('status')=='completed':break
+   await asyncio.sleep(.2)
+  assert shared['summary']['status']=='completed',shared['summary']
+  assert await frame.evaluate("""async expected=>{
+    const {StateStore}=await import('./src/state-store.js'); const s=await(await new StateStore().init()).get('task');
+    return s.id===expected && s.commands.loop.result.status==='error' && !s.pending;
+  }""",old_id)
+  print('PASS: continue in chat restores the same stopped task, seals old Python outcome, and finishes without settings',flush=True)
   print('PASS: internal file download, denied direct executor message, stop through chat toggle',flush=True)
   print('PASS: mobile viewport, foreground extension iframe, actual service-worker routing, settings closed, chat → Python Worker → files → final response',flush=True)
   await b.close()

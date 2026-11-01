@@ -52,8 +52,14 @@ export class DeepSeekAdapter {
     }), 15000, 'DeepSeek DOM');
     return r.result;
   }
-  inspect() {
-    return this.dom('inspect');
+  async conversationURL() {
+    return (await chrome.tabs.get(this.tabId)).url;
+  }
+  async inspect() {
+    for (let attempt = 0; ; attempt++) {
+      try { return await this.dom('inspect'); }
+      catch (e) { if (attempt >= 1 || this.abort) throw e; await sleep(200); }
+    }
   }
   async exchange(prompt, journal) {
     this.abort = false;
@@ -65,35 +71,63 @@ export class DeepSeekAdapter {
       prompt,
       before: {
         count: before.count,
-        answer: before.answer
+        answer: before.answer, userCount: before.userCount
       }
     });
     assert(!this.abort, 'Отправка отменена');
     await this.dom('send', prompt);
     await sleep(200);
-    // Persist BEFORE clicking: on any uncertain outcome never send again automatically.
-    await journal({
-      phase: 'send-uncertain',
-      prompt,
-      before: {
-        count: before.count,
-        answer: before.answer
-      }
-    });
-    assert(!this.abort, 'Отправка отменена до нажатия кнопки');
-    for (let attempt = 0; attempt < 10; attempt++) {
-      assert(!this.abort, 'Отправка отменена');
-      const state = await this.inspect();
-      if (state.sendEnabled !== false) break;
-      assert(state.status === 'ready', state.reason || 'Чат не готов к отправке');
-      await sleep(150);
-    }
-    await this.dom('submit');
+    await this.submitPrepared(prompt, before, journal);
     this.onStatus?.('waiting-response');
     return this.waitAnswer({
       ...before,
       sentPrompt: prompt
     });
+  }
+  reset() { this.abort = false; }
+  async submitPrepared(prompt, before, journal) {
+    await journal({ phase: 'inserted', prompt, before: { count: before.count, answer: before.answer, userCount: before.userCount } });
+    for (let attempt = 0; attempt < 10; attempt++) {
+      assert(!this.abort, 'Отправка отменена');
+      const state = await this.inspect();
+      assert(state.status === 'ready', state.reason || 'Чат не готов к отправке');
+      if (state.sendEnabled !== false) break;
+      await sleep(150);
+    }
+    assert(!this.abort, 'Отправка отменена');
+    const ready = await this.inspect();
+    assert(ready.status === 'ready' && ready.sendEnabled !== false, 'Чат пока не разрешил отправку. Запрос сохранён и ещё не отправлен.');
+    // Only this durable phase means a click may have happened.
+    await journal({ phase: 'send-uncertain', prompt, before: { count: before.count, answer: before.answer, userCount: before.userCount } });
+    assert(!this.abort, 'Отправка отменена');
+    const submitted = await this.dom('submit');
+    if (submitted?.attempted === false) {
+      await journal({ phase: 'inserted', prompt, before: { count: before.count, answer: before.answer, userCount: before.userCount } });
+      throw new Error(submitted.reason);
+    }
+  }
+  async recoverExchange(outbound, journal) {
+    assert(!this.abort, 'Ожидание остановлено');
+    const state = await this.inspect();
+    assert(['ready', 'generating'].includes(state.status), state.reason || 'Веб-чат пока недоступен');
+    const delivery = await this.dom('delivery', outbound.prompt);
+    if (outbound.phase === 'send-uncertain') {
+      assert(delivery.posted && delivery.latest,
+        'Ответ DeepSeek пока не подтверждён. Можно позже написать «продолжай» или отправить новую задачу.');
+      // Read the already sent exchange, never click Send again.
+      return this.waitAnswer({ ...outbound.before, sentPrompt: outbound.prompt });
+    }
+    assert(['prepared', 'inserted'].includes(outbound.phase), 'Неизвестное состояние отправки');
+    if (delivery.posted && delivery.latest && (outbound.before.userCount === undefined ||
+        delivery.userCount > outbound.before.userCount || state.status === 'generating' ||
+        state.answer !== outbound.before.answer)) {
+      return this.waitAnswer({ ...outbound.before, sentPrompt: outbound.prompt });
+    }
+    assert(state.status === 'ready' && delivery.draft !== 'other',
+      'В поле чата другой текст. Отправь его как новую задачу, когда чат будет готов.');
+    if (delivery.draft === 'empty') await this.dom('send', outbound.prompt);
+    await this.submitPrepared(outbound.prompt, outbound.before, journal);
+    return this.waitAnswer({ ...outbound.before, sentPrompt: outbound.prompt });
   }
   async waitAnswer(before) {
     let seenGeneration = false,
@@ -119,7 +153,7 @@ export class DeepSeekAdapter {
       }
       await sleep(750);
     }
-    throw new Error('DeepSeek: таймаут; проверьте чат, повторная отправка заблокирована');
+    throw new Error('DeepSeek пока не завершил ответ. Можно позже написать «продолжай»; запрос повторно не отправляется.');
   }
   cancel() {
     this.abort = true;

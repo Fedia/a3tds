@@ -1,3 +1,4 @@
+import { operationKey, recoverTool } from './recovery.js';
 import {
   assert,
   bounded,
@@ -62,17 +63,26 @@ export class AgentController {
   }
   async start() {
     assert(this.s && !this.running, 'Нет задачи или уже запущена');
-    assert(!this.s.pending, 'Незавершённую команду нужно проверить вручную');
-    assert(!this.s.outbound, 'Проверьте неопределённую отправку DeepSeek');
     const entryEpoch = this.epoch;
     await this.files.permission();
     assert(this.epoch === entryEpoch && this.s.status !== 'stopped', 'Запуск отменён');
+    this.model.reset?.();
     this.s.status = 'running';
     this.s.reason = '';
     this.running = true;
     const epoch = ++this.epoch;
     await this.save();
     try {
+      await this.recoverPending();
+      await this.browser.recoverTabs?.();
+      await this.save();
+      if (epoch !== this.epoch || this.s.status !== 'running') return;
+      if (this.s.outbound) {
+        this.s.received = await this.model.recoverExchange(this.s.outbound, async outbound => {
+          this.s.outbound = outbound; await this.save();
+        });
+        this.s.outbound = null; await this.save();
+      }
       let repairs = 0;
       while (this.s.status === 'running' && epoch === this.epoch) {
         assert(this.s.steps < 50, 'Достигнут лимит 50 шагов');
@@ -85,10 +95,13 @@ export class AgentController {
             prompt
           });
           await this.save();
-          raw = await this.model.exchange(prompt, async outbound => {
-            this.s.outbound = outbound;
-            await this.save();
-          });
+          const journal = async outbound => { this.s.outbound = outbound; await this.save(); };
+          try { raw = await this.model.exchange(prompt, journal); }
+          catch (e) {
+            if (epoch !== this.epoch || this.s.status !== 'running' || !this.s.outbound || !this.model.recoverExchange) throw e;
+            raw = await this.model.recoverExchange(this.s.outbound, journal);
+          }
+          if (this.model.conversationURL) this.s.modelChatURL = await this.model.conversationURL();
           this.s.received = raw;
           this.s.outbound = null;
           await this.save();
@@ -139,27 +152,15 @@ export class AgentController {
             data
           };
         } catch (e) {
-          // All failures with possibly completed side effects remain pending for reconciliation.
-          if (e.definite || ['browser.snapshot', 'browser.extract', 'files.list', 'files.read', 'corpus.read'].includes(c
-              .tool)) {
-            result = {
-              id: c.id,
-              status: 'error',
-              error: {
-                code: 'TOOL_FAILED',
-                message: e.message
-              }
-            };
+          if (epoch !== this.epoch || this.s.status === 'stopped') throw e;
+          if (e.definite || ['browser.snapshot', 'browser.extract', 'files.list', 'files.read', 'corpus.read'].includes(c.tool)) {
+            result = { id: c.id, status: 'error', error: { code: 'TOOL_FAILED', message: e.message } };
           } else {
-            this.s.pending.error = e.message;
-            await this.log('tool-uncertain', {
-              id: c.id,
-              tool: c.tool,
-              message: e.message
-            });
-            throw e;
+            result = await recoverTool(this, c, e.message);
+            await this.log('tool-recovered', { id: c.id, status: result.status, code: result.error?.code });
           }
         }
+        await this.store.put('receipt:' + operationKey(this.s, c), result);
         this.s.commands[c.id] = {
           command: c,
           result
@@ -192,10 +193,21 @@ export class AgentController {
       await this.save();
     }
   }
+  async recoverPending() {
+    const pending = this.s.pending;
+    if (!pending) return;
+    const c = pending.command;
+    const result = this.s.commands[c.id]?.result || await recoverTool(this, c);
+    if (!this.s.commands[c.id]) this.s.steps++;
+    this.s.commands[c.id] = { command: c, result };
+    this.s.last = result; this.s.pending = null; this.s.received = null;
+    await this.store.put('receipt:' + operationKey(this.s, c), result);
+    await this.log('pending-recovered', { id: c.id, status: result.status });
+  }
   async execute(c) {
     const a = c.args;
     if (c.tool.startsWith('browser.')) {
-      const result = await this.browser.execute(c.tool, a);
+      const result = await this.browser.execute(c.tool, a, { commandId: c.id });
       if (c.tool === 'browser.extract') {
         const out = await this.files.write(`extract-${c.id}.json`, JSON.stringify(result, null, 2));
         this.s.files.push(out.path);
@@ -213,7 +225,7 @@ export class AgentController {
       return this.files.read(a.path, a.offset, a.limit);
     }
     if (c.tool === 'files.write') {
-      const r = await this.files.write(a.path, a.text);
+      const r = await this.files.write(a.path, a.text, { operationId: operationKey(this.s, c) });
       this.s.files.push(r.path);
       return r;
     }

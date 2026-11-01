@@ -205,6 +205,13 @@ export class BrowserTools {
     if (!t.url?.startsWith(chrome.runtime.getURL('fixtures/'))) safeURL(t.url);
     return t;
   }
+  async recoverTabs() {
+    const valid = [];
+    for (const tab of this.state.tabs) {
+      try { await this.check(tab.id); valid.push(tab); } catch {}
+    }
+    this.state.tabs = valid;
+  }
   async attach(id) {
     await this.check(id);
     if (this.attached.has(id)) return;
@@ -225,6 +232,15 @@ export class BrowserTools {
     return this.transport === 'scripting' || !chrome.debugger?.attach;
   }
   async run(id, op, args = {}) {
+    for (let attempt = 0; ; attempt++) {
+      try { return await this.runOnce(id, op, args); }
+      catch (e) {
+        if (attempt >= 1 || !['snapshot', 'extract', 'locate'].includes(op) || this.interrupted) throw e;
+        await sleep(200);
+      }
+    }
+  }
+  async runOnce(id, op, args = {}) {
     if (this.useScripting()) {
       await this.check(id);
       const [result] = await timeout(chrome.scripting.executeScript({
@@ -258,7 +274,7 @@ export class BrowserTools {
     return r.result.value;
   }
   async open(url, {
-    fixture = false
+    fixture = false, commandId
   } = {}) {
     assert(this.state.tabs.length < 5, 'Лимит пяти рабочих страниц');
     if (!fixture) {
@@ -274,7 +290,7 @@ export class BrowserTools {
     });
     this.state.tabs.push({
       id: tab.id,
-      url
+      url, commandId
     });
     await this.save();
     for (let i = 0; i < 100; i++) {
@@ -287,10 +303,10 @@ export class BrowserTools {
       url: (await this.check(tab.id)).url
     };
   }
-  async execute(tool, a) {
+  async execute(tool, a, context = {}) {
     const op = tool.split('.')[1];
     if (op === 'open') {
-      const opened = await this.open(a.url);
+      const opened = await this.open(a.url, context);
       try {
         return { ...opened, page: await this.run(opened.tabId, 'snapshot') };
       } catch (e) {
@@ -300,6 +316,10 @@ export class BrowserTools {
       }
     }
     if (op === 'click' || op === 'type') {
+      if (this.state.blockedInteractions?.includes(a.tabId)) {
+        const error = new Error('Исход предыдущего взаимодействия не подтверждён. Эта вкладка доступна для чтения; используй чтение или открой другую.');
+        error.definite = true; throw error;
+      }
       let info;
       try { info = await this.run(a.tabId, 'locate', a); }
       catch (e) { e.definite = true; throw e; }

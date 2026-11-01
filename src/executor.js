@@ -53,7 +53,7 @@ async function notice(text) {
     });
   } catch {}
 }
-async function connect() {
+async function connect({ allowGenerating = false } = {}) {
   const caps = capabilities();
   assert(caps.scripting && caps.sessionStorage && caps.worker && caps.locks,
     'В браузере недоступны scripting, session storage, Web Locks или Worker. Подробности — в диагностике настроек.'
@@ -63,11 +63,11 @@ async function connect() {
   await files.restore();
   await files.permission();
   const state = await model.connect(tabId, options['chat-bindings'] || {});
-  assert(state.status === 'ready', state.reason || 'Чат ещё не готов к отправке');
+  assert(state.status === 'ready' || allowGenerating && state.status === 'generating', state.reason || 'Чат ещё не готов к отправке');
   return options;
 }
-async function restoreController() {
-  const options = await connect();
+async function restoreController(options = {}) {
+  const settings = await connect(options);
   browser ||= new BrowserTools({
     tabs: []
   }, () => controller.save(), async detail => {
@@ -79,7 +79,7 @@ async function restoreController() {
     });
     assert(result?.approved, 'Пользователь отказал');
   });
-  browser.transport = options['browser-mode'] || 'auto';
+  browser.transport = settings['browser-mode'] || 'auto';
   controller = new AgentController({
     store,
     files,
@@ -102,30 +102,42 @@ async function runLocked(message, respond) {
       ifAvailable: true
     }, async lock => {
       assert(lock, 'Агент выполняется в другом чате');
-      await restoreController();
+      const continuing = message.command === 'resume' || message.command === 'chat-task' &&
+        /^(продолжай|продолжи|продолжить|возобнови|дальше)[.!\s]*$/i.test(message.task?.trim() || '');
+      await restoreController({ allowGenerating: continuing });
       assert(generation === cancellation, 'Запуск отменён');
-      if (message.command === 'chat-task') {
+      if (message.command === 'chat-task' && !continuing) {
         // A new task archives uncertainty; it never resumes or retries the old command.
         assert(typeof message.task === 'string' && message.task.trim() && message.task.length <=
           20000, 'Задача пуста или слишком длинная');
         if (controller.s) await store.put('archive-' + controller.s.id, controller.s);
         await controller.create(message.task);
         controller.s.modelTabId = tabId;
+        controller.s.modelChatURL = (await chrome.tabs.get(tabId)).url;
         await controller.save();
         assert(generation === cancellation, 'Запуск отменён');
         await model.dom('clear-task', message.task);
         assert(generation === cancellation, 'Запуск отменён');
       } else {
         assert(controller.s, 'Нет задачи для восстановления');
-        // Explicit settings action binds a restored task to the selected original chat.
-        controller.s.modelTabId = tabId;
+        const chatURL = (await chrome.tabs.get(tabId)).url;
+        let sameChat = controller.s.modelChatURL ? controller.s.modelChatURL === chatURL : controller.s.modelTabId === tabId;
+        if (!sameChat && controller.s.outbound && controller.s.modelChatURL &&
+            ['/', '/a/chat', '/a/chat/'].includes(new URL(controller.s.modelChatURL).pathname)) {
+          const delivery = await model.dom('delivery', controller.s.outbound.prompt);
+          sameChat = delivery.posted && delivery.latest;
+          if (sameChat) controller.s.modelChatURL = chatURL;
+        }
+        assert(sameChat, 'Эта задача относится к другому чату. Можно отправить здесь новую задачу.');
+        if (continuing && message.command === 'chat-task') await model.dom('clear-task', message.task);
+        if (continuing && controller.s.status === 'stopped') controller.s.status = 'paused';
         if (message.command === 'reconcile') await controller.reconcileCommand(message.note);
         if (message.command === 'recover-send') await controller.reconcileSend();
         if (message.command === 'reset-tabs') {
           controller.s.tabs = [];
           await controller.save();
         }
-        if (message.command !== 'resume') {
+        if (!continuing) {
           respond({
             ok: true
           });
@@ -141,7 +153,7 @@ async function runLocked(message, respond) {
         await notice(e.message);
       }
       if (controller.s.status === 'paused') await notice('Агент приостановлен: ' + controller.s
-        .reason + '\nОткройте настройки для восстановления.');
+        .reason + '\nМожно написать «продолжай» или отправить новую задачу.');
     });
   } finally {
     handling = false;

@@ -110,7 +110,7 @@ export class ProjectFiles {
   }
   /** Never overwrite an unowned or externally modified file. Ownership is content-hash based. */
   async write(path, text, {
-    owned = false
+    owned = false, operationId
   } = {}) {
     assert((typeof text === 'string' || text instanceof Uint8Array) && text.length <= 10000000,
       'Слишком большой файл');
@@ -131,6 +131,8 @@ export class ProjectFiles {
     const h = await d.getFileHandle(name, {
       create: true
     });
+    const actual = [...pathParts(path).slice(0, -1), name].join('/');
+    if (operationId) await this.store.put('write:' + operationId, { path: actual, hash: await hash(text) });
     const stream = await h.createWritable();
     try {
       await stream.write(text);
@@ -139,7 +141,6 @@ export class ProjectFiles {
       await stream.abort().catch(() => {});
       throw e;
     }
-    const actual = [...pathParts(path).slice(0, -1), name].join('/');
     owners[actual] = await hash(text);
     await this.store.put('owned-files', owners);
     return {

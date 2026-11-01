@@ -1,6 +1,6 @@
 {
   "date": "2026-11-01",
-  "version": "0.2.0",
+  "version": "0.2.6",
   "viewport": {
     "width": 390,
     "height": 844
@@ -20,6 +20,10 @@
     "four-touch binding wizard",
     "touch cancellation",
     "programmatic adapter send passes through",
-    "settings no horizontal overflow"
+    "settings no horizontal overflow",
+    "new task archives old pending/outbound without replay",
+    "final summary visible in chat",
+    "continue in chat resumes the same stopped task without settings",
+    "old Python operation sealed without rerun"
   ]
 }
