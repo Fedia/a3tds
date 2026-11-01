@@ -1,7 +1,7 @@
 /* Isolated content script. Page scripts cannot call the extension message bridge. */
 (async () => {
   const {
-    deepseekDOM
+    deepseekDOM, bindingSelector, bindingTarget
   } = await import(chrome.runtime.getURL('src/chat-dom.js'));
   let enabled = false,
     busy = false,
@@ -140,31 +140,6 @@
     }
   });
 
-  function selector(element, root = document, repeated = false) {
-    for (const attr of ['data-message-author-role', 'data-role', 'aria-label', 'data-testid', 'id']) {
-      const value = element.getAttribute(attr);
-      if (value) {
-        const css = `${element.localName}[${attr}="${CSS.escape(value)}"]`;
-        if (repeated || root.querySelectorAll(css).length === 1) return css;
-      }
-    }
-    const classes = [...element.classList].filter(c => !/[0-9]{4}/.test(c));
-    if (classes.length) {
-      const css = element.localName + classes.map(c => '.' + CSS.escape(c)).join('');
-      if (repeated || root.querySelectorAll(css).length === 1) return css;
-    }
-    if (repeated) return ''; // Automatic toolbar discovery handles containers without stable attributes.
-    let node = element,
-      parts = [];
-    while (node && node !== root && node !== document.documentElement) {
-      const peers = [...node.parentElement.children].filter(e => e.localName === node.localName);
-      parts.unshift(node.localName + ':nth-of-type(' + (peers.indexOf(node) + 1) + ')');
-      const css = parts.join(' > ');
-      if (root.querySelectorAll(css).length === 1) return css;
-      node = node.parentElement;
-    }
-    throw new Error('Не удалось сохранить привязку');
-  }
   async function pick() {
     if (picking) return;
     enabled = false;
@@ -220,8 +195,7 @@
               }
               return;
             }
-            const el = e.target.closest(
-              'button,[role=button],textarea,input,[contenteditable=true]') || e.target;
+            const el = bindingTarget(e.target, key);
             cleanup();
             resolve(el);
           };
@@ -244,16 +218,16 @@
         }
         if (key === 'complete') {
           while (response && !response.contains(element)) response = response.parentElement;
-          if (!response || response === document.body || response === document.documentElement)
+          if (!response || response === element || response === document.body || response === document.documentElement)
             throw new Error('Выберите текст и кнопку одного ответа.');
-          result.response = selector(response, document, true);
+          result.response = bindingSelector(response, document, true);
         }
-        result[key] = selector(element, key === 'complete' ? response : document);
+        result[key] = bindingSelector(element, key === 'complete' ? response : document);
       }
-      config = result;
       await chrome.storage.local.set({
         'chat-bindings': result
       });
+      config = result;
       alert('Привязка сохранена. Включите режим агента и напишите задачу в чат.');
     } finally {
       hint.remove();

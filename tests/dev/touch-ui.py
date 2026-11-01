@@ -33,6 +33,26 @@ async def main():
   await page.evaluate("receive({type:'pick-bindings'},{id:'test-extension'},r=>window.cancelResult=r)")
   await page.get_by_text('Отменить',exact=True).tap();await page.wait_for_timeout(100)
   assert await page.evaluate("cancelResult.error === 'Настройка отменена'")
+  # Anonymous SVG controls: select the icon, save, then resolve from serialized settings.
+  await page.evaluate("""() => {
+    const answer = document.querySelector('.answer');
+    answer.querySelector('.complete').remove();
+    const toolbar = document.createElement('div');
+    toolbar.innerHTML = '<div style="width:44px;height:44px;cursor:pointer"><svg width="40" height="40"><path d="M0 0 H40 V40 H0 Z" /></svg></div>';
+    answer.append(toolbar);
+  }""")
+  await page.evaluate("receive({type:'pick-bindings'},{id:'test-extension'},r=>window.svgResult=r)")
+  await page.locator('#composer').tap();await page.locator('#send').tap()
+  await page.locator('.answer').first.tap(position={'x':20,'y':5})
+  await page.locator('.answer svg path').tap();await page.wait_for_timeout(100)
+  assert await page.evaluate("""async () => {
+    if (!svgResult.ok) throw new Error(svgResult.error);
+    const config = JSON.parse(JSON.stringify(saved['chat-bindings']));
+    const {deepseekDOM} = await import('/src/chat-dom.js');
+    document.querySelectorAll('.answer')[1].remove();
+    const result = deepseekDOM('inspect', config);
+    return result.completion && document.querySelector('.answer').querySelector(config.complete) === document.querySelector('svg').parentElement;
+  }""")
   print('PASS: click/Enter interception, ordinary chat, stop toggle, four-click picker, programmatic adapter send')
   await b.close()
 asyncio.run(main());server.shutdown()

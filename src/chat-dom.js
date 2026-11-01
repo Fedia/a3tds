@@ -161,3 +161,51 @@ export function deepseekDOM(action, config, payload) {
     };
   }
 }
+
+/** Resolve a tap on an SVG path to its surrounding interactive control. */
+export function bindingTarget(target, kind) {
+  if (kind === 'response') return target;
+  const control = target.closest('button,[role=button],textarea,input,[contenteditable=true],[tabindex]');
+  if (control) return control;
+  const svg = target.closest('svg');
+  return svg?.parentElement || target;
+}
+
+/** A saved selector must resolve to the selected element, not merely one element. */
+export function bindingSelector(element, root = document, repeated = false) {
+  if (!element.isConnected || !root.contains(element)) {
+    throw new Error('Страница изменилась во время выбора. Повторите выбор элемента.');
+  }
+  if (element === root) throw new Error('Выберите кнопку копирования отдельно от текста ответа.');
+  const correct = css => {
+    const nodes = [...root.querySelectorAll(css)];
+    return nodes.includes(element) && (repeated || nodes.length === 1);
+  };
+  for (const attr of ['data-message-author-role', 'data-role', 'aria-label', 'data-testid', 'id']) {
+    const value = element.getAttribute(attr);
+    if (!value) continue;
+    const css = `[${attr}="${CSS.escape(value)}"]`;
+    if (correct(css)) return css;
+  }
+  const classes = [...element.classList].filter(c => !/[0-9]{4}/.test(c));
+  if (classes.length) {
+    const css = classes.map(c => '.' + CSS.escape(c)).join('');
+    if (correct(css)) return css;
+  }
+  if (repeated) return ''; // Never pin the response reader to one old message.
+  // Positional fallback is anchored, namespace-independent and verified by identity.
+  // In particular SVG <path> must not be confused with a different icon's path.
+  const parts = [];
+  let node = element;
+  while (node && node !== root) {
+    const parent = node.parentNode;
+    if (!parent?.children) break;
+    parts.unshift(`*:nth-child(${[...parent.children].indexOf(node) + 1})`);
+    if (parent === root) {
+      const css = (root.nodeType === 9 ? '' : ':scope > ') + parts.join(' > ');
+      if (correct(css)) return css;
+    }
+    node = parent;
+  }
+  throw new Error('Элемент находится в неподдерживаемом вложенном дереве. Выберите внешнюю кнопку.');
+}
