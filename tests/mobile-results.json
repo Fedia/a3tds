@@ -1,6 +1,6 @@
 {
   "date": "2026-11-02",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "viewport": {
     "width": 390,
     "height": 844
@@ -32,6 +32,7 @@
     "single authoritative pause message with no tool status cards",
     "final summary appears only after controller acceptance",
     "conditional folder and site access controls",
-    "automatic scripting fallback respects manual interruption"
+    "automatic scripting fallback respects manual interruption",
+    "controls always above composer; real settings tap hits toolbar despite hidden duplicate headers and recreated composer"
   ]
 }

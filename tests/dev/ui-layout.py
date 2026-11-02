@@ -13,7 +13,7 @@ async def main():
   for theme in ['light','dark']:
    context=await browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True,color_scheme=theme)
    await context.add_init_script('''window.allShadows=[];const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=function(o){const s=attach.call(this,o);allShadows.push(s);window.testShadow=s;return s};window.storageListeners=[];window.siteAccess=true;window.values={'file-mode':'browser','browser-mode':'auto','chat-bindings':{input:'#composer',send:'#send'}};
-   window.chrome={runtime:{id:'test-extension',getURL:p=>location.origin+'/'+p,onMessage:{addListener:f=>window.receive=f},sendMessage:async m=>({ok:true,data:m.type==='engine-ping'?{tabId:1,chatURL:location.href}:{capabilities:{debugger:true,scripting:true}}})},storage:{local:{get:async keys=>Object.fromEntries((typeof keys==='string'?[keys]:keys).map(k=>[k,values[k]])),set:async data=>{Object.assign(values,data);for(const f of storageListeners)f(Object.fromEntries(Object.entries(data).map(([k,v])=>[k,{newValue:v}])),'local')}},session:{get:async()=>({'settings-chat-tab':1}),set:async()=>{}},onChanged:{addListener:f=>storageListeners.push(f)}},tabs:{query:async()=>[{id:1,url:'https://chat.deepseek.com/a/chat/test',title:'DeepSeek',active:true}],update:async()=>({id:1}),sendMessage:async()=>({ok:true})},permissions:{contains:async()=>siteAccess,request:async()=>{siteAccess=true;return true}},scripting:{executeScript:async()=>[{result:{status:'ready'}}]}};
+   window.sent=[];window.chrome={runtime:{id:'test-extension',getURL:p=>location.origin+'/'+p,onMessage:{addListener:f=>window.receive=f},sendMessage:async m=>{sent.push(m);return {ok:true,data:m.type==='engine-ping'?{tabId:1,chatURL:location.href}:{capabilities:{debugger:true,scripting:true}}}}},storage:{local:{get:async keys=>Object.fromEntries((typeof keys==='string'?[keys]:keys).map(k=>[k,values[k]])),set:async data=>{Object.assign(values,data);for(const f of storageListeners)f(Object.fromEntries(Object.entries(data).map(([k,v])=>[k,{newValue:v}])),'local')}},session:{get:async()=>({'settings-chat-tab':1}),set:async()=>{}},onChanged:{addListener:f=>storageListeners.push(f)}},tabs:{query:async()=>[{id:1,url:'https://chat.deepseek.com/a/chat/test',title:'DeepSeek',active:true}],update:async()=>({id:1}),sendMessage:async()=>({ok:true})},permissions:{contains:async()=>siteAccess,request:async()=>{siteAccess=true;return true}},scripting:{executeScript:async()=>[{result:{status:'ready'}}]}};
    ''')
    settings=await context.new_page();await settings.goto(BASE+'workspace.html');await settings.wait_for_function("document.querySelector('#chat-status').textContent==='Подключён'")
    assert not await settings.locator('#advanced').get_attribute('open')
@@ -32,14 +32,20 @@ async def main():
    await chat.evaluate("testShadow.querySelector('input').click()");await chat.wait_for_timeout(200)
    bounds=await chat.evaluate('''()=>{const r=testShadow.host.getBoundingClientRect();return {height:r.height,position:getComputedStyle(testShadow.host).position}}''')
    assert bounds['height']<=48 and bounds['position']!='fixed',bounds
+   assert await chat.evaluate("testShadow.host.nextElementSibling===document.querySelector('.psy-agent-progress') && document.querySelector('.psy-agent-progress').nextElementSibling===document.querySelector('form')"), 'Controls must precede the composer, independent of headers'
+   gear=await chat.evaluate("()=>{const r=testShadow.querySelector('button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}}")
+   assert await chat.evaluate("({x,y})=>document.elementFromPoint(x,y)===testShadow.host",gear), 'Settings must be on screen and not covered'
+   await chat.touchscreen.tap(gear['x'],gear['y'])
+   assert await chat.evaluate("sent.some(m=>m.type==='open-workspace')"), 'A real tap must open settings'
    assert await chat.locator('.psy-agent-step').count()==0
    text=await chat.locator('.psy-agent-progress').inner_text()
    assert text=='Пауза. Не удалось прочитать ответ DeepSeek.',text
    assert 'Агент работает' not in await chat.locator('body').inner_text()
    assert await chat.evaluate('document.documentElement.scrollWidth<=innerWidth')
-   await chat.evaluate("window.originalEngine=allShadows[0].querySelector('iframe').contentWindow;const h=document.querySelector('.the-header');h.replaceWith(h.cloneNode(true))")
+   await chat.evaluate("window.originalEngine=allShadows[0].querySelector('iframe').contentWindow;const h=document.querySelector('header:not([hidden])');h.replaceWith(h.cloneNode(true));const form=document.querySelector('form');form.replaceWith(form.cloneNode(true))")
    await chat.wait_for_timeout(300)
    assert await chat.evaluate("originalEngine===allShadows[0].querySelector('iframe').contentWindow && document.querySelectorAll('[data-psy-agent-toolbar]').length===1")
+   assert await chat.evaluate("document.querySelector('.psy-agent-progress').nextElementSibling===document.querySelector('form') && !testShadow.host.closest('header')")
    await chat.screenshot(path=str(OUT/f'chat-{theme}.png'))
    await settings.evaluate('''async()=>{
      chrome.tabs.onRemoved={addListener(){}};

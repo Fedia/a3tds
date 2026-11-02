@@ -3,6 +3,7 @@
 :root{font:16px/1.5 system-ui;color:#222;background:#fff}*{box-sizing:border-box}body{margin:0;height:100dvh;display:flex;flex-direction:column}.the-header{display:flex;align-items:center;gap:8px;padding:0 12px;height:56px;flex:0 0 56px;border-bottom:1px solid #ddd}.native-title{flex:1;min-width:0;overflow:hidden}.messages{flex:1;min-height:0;overflow:auto;padding:20px}.ds-message{white-space:pre-wrap}.user{margin-bottom:20px;background:#f3f5f8;border-radius:16px;padding:12px}.assistant{margin:16px 0}button{min-width:44px;min-height:44px;border:0;background:transparent;color:inherit;font:inherit}form{padding:12px;display:flex;gap:8px;border-top:1px solid #ddd}textarea{font:inherit;resize:none;width:100%;height:80px;padding:10px;border:1px solid #aaa;border-radius:12px;color:inherit;background:transparent}
 @media(prefers-color-scheme:dark){:root{background:#181b22;color:#e5e8f0}.user{background:#292e38}.the-header,form{border-color:#3b424e}}
 </style>
+<div hidden><header class="the-header"><span>Скрытая десктопная шапка</span></header></div>
 <header class="the-header"><span class="native-title">DeepSeek</span></header>
 <div class="messages ds-virtual-list-visible-items"><div class="user"><div class="ds-message" id="task"></div></div><div class="assistant"><div class="ds-message"><div class="ds-assistant-message-main-content" id="answer"></div></div><button aria-label="Copy">⧉</button></div></div>
 <form><textarea id="composer" placeholder="Сообщение для DeepSeek"></textarea><button type="button" id="send" aria-label="Send">↑</button></form>

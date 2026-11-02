@@ -79,7 +79,7 @@
     noticeTimer;
   const send = message => chrome.runtime.sendMessage(message);
   const inputElement = () => deepseekDOM('elements', config).input;
-  const nativeColor = () => getComputedStyle(document.querySelector('.the-header') || inputElement() || document.body).color;
+  const nativeColor = () => getComputedStyle(inputElement() || document.body).color;
   const activeState = () => belongsToChat(currentState, location.href, ownerTabId) ? currentState : null;
   const acceptedFinals = () => finals.filter(item => item.chatURL === location.href);
   const view = () => mountFinalAnswers(() => deepseekDOM('answer-elements', config), {
@@ -134,23 +134,19 @@
         });
       }
     }
-    const header = document.querySelector('.the-header,header,[role=banner]');
     const composer = inputElement();
-    if (header) {
-      if (!header.contains(host) && host.previousElementSibling !== header) header.append(host);
-      if (header.contains(host) && (header.scrollWidth > header.clientWidth + 2 || host.getBoundingClientRect().height > 48)) header.after(host);
-    } else if (composer) {
-      const anchor = composerAnchor(composer);
-      if (host.nextElementSibling !== progress || progress.nextElementSibling !== anchor) anchor.before(host, progress);
-    } else if (!host.isConnected) document.body.prepend(host);
     if (composer) {
       const anchor = composerAnchor(composer);
-      if (anchor.previousElementSibling !== progress) anchor.before(progress);
-    } else if (host.nextElementSibling !== progress) host.after(progress);
+      if (host.nextElementSibling !== progress || progress.nextElementSibling !== anchor) anchor.before(host, progress);
+    } else {
+      if (!host.isConnected) document.body.prepend(host);
+      if (host.nextElementSibling !== progress) host.after(progress);
+    }
     paint();
   }
   let placementTimer;
-  new MutationObserver(() => {
+  new MutationObserver(records => {
+      if (records.every(record => record.type === 'attributes' && [host, progress].includes(record.target))) return;
       if (placementTimer) return;
       placementTimer = setTimeout(() => {
         placementTimer = null;
@@ -159,9 +155,12 @@
     })
     .observe(document.body, {
       childList: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden'],
       subtree: true
     });
   window.addEventListener('resize', place);
+  window.visualViewport?.addEventListener('resize', place);
   async function load() {
     const values = await chrome.storage.local.get(['chat-bindings', 'summary', 'ui-finals']);
     config = values['chat-bindings'] || {};
