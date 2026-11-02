@@ -1,8 +1,8 @@
 {
   "date": "2026-11-02",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 37,
+  "passed": 38,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -66,6 +66,10 @@
     },
     {
       "name": "Pyodide: pandas, статистика, matplotlib, файл и изоляция",
+      "ok": true
+    },
+    {
+      "name": "Загрузка пакетов: только известные wheel/метаданные, SHA-256 и отсутствие тела/учётных данных",
       "ok": true
     },
     {

@@ -1,3 +1,4 @@
+import { PythonPackages, PYODIDE_CDN } from '../src/python-packages.js';
 import { stateLabel, progressText, projectTask, belongsToChat } from '../src/ui-state.js';
 import { Captures } from '../src/captures.js';
 import { loadPythonInputs } from '../src/python-inputs.js';
@@ -409,9 +410,19 @@ test('Pyodide: pandas, статистика, matplotlib, файл и изоля�
     }, 90000);
   assert(r.result.total === 6 && r.files[0].bytes[0] === 137, 'Python/PNG');
 });
+test('Загрузка пакетов: только известные wheel/метаданные, SHA-256 и отсутствие тела/учётных данных', async()=>{
+  const payload=new TextEncoder().encode('wheel bytes'),digest=await(await import('../src/util.js')).hash(payload);
+  let calls=0;const loader=new PythonPackages({fetcher:async(url,options)=>{calls++;assert(options.method==='GET'&&options.credentials==='omit'&&options.redirect==='error'&&!options.body,'Разрешено только анонимное скачивание');return new Response(payload,{headers:{'Content-Type':'application/octet-stream'}})}});
+  for(const url of ['https://example.com/pkg.whl','https://pypi.org/simple/emoji/?secret=data',PYODIDE_CDN+'pyodide.js','https://user:password@pypi.org/simple/emoji/'])await fail(()=>loader.download(url));
+  assert(calls===0,'Запрещённые URL не отправляются');
+  const asset=PYODIDE_CDN+'known.whl';loader.assets.set(asset,{digest});assert((await loader.download(asset)).bytes.length===payload.length,'Разрешённый пакет проверен');
+  loader.assets.set(asset,{digest:'0'.repeat(64)});await fail(()=>loader.download(asset));
+  loader.register({files:[{url:'https://evil.example/pkg.whl',hashes:{sha256:digest}},{url:'https://files.pythonhosted.org/packages/test/demo-1-py3-none-any.whl',hashes:{sha256:digest}}]},'simple');
+  assert(!loader.assets.has('https://evil.example/pkg.whl')&&loader.assets.has('https://files.pythonhosted.org/packages/test/demo-1-py3-none-any.whl'),'Индекс не расширяет доверенные источники');
+});
 test('Python: простой код без тяжёлых библиотек, этапы запуска и отдельное время вычисления', async()=>{
   const p=new PythonRuntime(), phases=[];p.onProgress=phase=>phases.push(phase);
-  const r=await p.run("import sys\nresult={'sum':sum(data),'heavy':[name for name in ['numpy','pandas','matplotlib'] if name in sys.modules]}",[1,2,3],1000);
+  const r=await p.run("import sys, asyncio\nawait asyncio.sleep(0.01)\nresult={'sum':sum(data),'heavy':[name for name in ['numpy','pandas','matplotlib'] if name in sys.modules]}",[1,2,3],1000);
   assert(r.result.sum===6&&r.result.heavy.length===0,'Простой код не загружает NumPy/pandas/matplotlib');
   assert(['sandbox','worker','bootstrap','runtime','packages','inputs','running','exporting'].every(x=>phases.includes(x)),'Все этапы различимы');
   assert(!p.worker,'Среда очищена после выполнения');

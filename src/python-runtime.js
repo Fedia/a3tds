@@ -1,4 +1,7 @@
 import {
+  PythonPackages
+} from './python-packages.js';
+import {
   assert,
   pathParts
 } from './util.js';
@@ -35,6 +38,18 @@ export class PythonRuntime {
       frame.src = url.href;
       this.worker = frame;
       const startupDeadline = Date.now() + this.startupMs;
+      const downloads = new AbortController();
+      let packageCount = 0,
+        packagePhase = 'packages';
+      let packageLoader;
+      const loader = () => packageLoader ||= (async () => {
+        const client = new PythonPackages({
+          signal: downloads.signal,
+          onProgress: message => progress('packages', JSON.stringify(message))
+        });
+        await client.init();
+        return client;
+      })();
       let timer, settled = false,
         connected = false,
         phase = 'sandbox',
@@ -42,6 +57,7 @@ export class PythonRuntime {
       const finish = (err, value) => {
         if (settled) return;
         settled = true;
+        downloads.abort();
         clearTimeout(timer);
         window.removeEventListener('message', ready);
         try {
@@ -114,6 +130,32 @@ export class PythonRuntime {
       channel.port1.onmessage = event => {
         if (settled) return;
         const message = event.data;
+        if (message?.type === 'python-package-request') {
+          if (!Number.isSafeInteger(message.id) || typeof message.url !== 'string' || message.url.length > 2000) return;
+          if (packageCount++ === 0) packagePhase = phase;
+          (async () => {
+            try {
+              const response = await (await loader()).download(message.url);
+              if (!settled) channel.port1.postMessage({
+                type: 'python-package-response',
+                id: message.id,
+                ok: true,
+                contentType: response.contentType,
+                bytes: response.bytes
+              }, [response.bytes.buffer]);
+            } catch (error) {
+              if (!settled) channel.port1.postMessage({
+                type: 'python-package-response',
+                id: message.id,
+                ok: false,
+                error: error.message
+              });
+            } finally {
+              if (--packageCount === 0 && !settled) progress(packagePhase);
+            }
+          })();
+          return;
+        }
         if (message?.type === 'python-progress') {
           if (['bootstrap', 'runtime', 'packages', 'inputs', 'running', 'exporting'].includes(message.phase)) progress(message.phase, message.detail);
           return;

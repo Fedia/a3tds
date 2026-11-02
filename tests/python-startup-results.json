@@ -1,6 +1,6 @@
 {
   "date": "2026-11-02",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "environment": "Chromium Linux; actual sandbox, Worker, WASM; simulated startup failures",
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,

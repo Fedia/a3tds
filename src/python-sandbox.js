@@ -23,6 +23,7 @@ window.addEventListener('message', event => {
   };
   port.onmessage = e => {
     if (e.data?.type === 'cancel') cleanup();
+    else if (e.data?.type === 'python-package-response' && !finished) worker?.postMessage(e.data, e.data.bytes ? [e.data.bytes.buffer] : []);
   };
   port.start();
   window.addEventListener('securitypolicyviolation', e => fail(new Error('загрузка заблокирована политикой браузера (' + e.violatedDirective + ')')));
@@ -37,7 +38,7 @@ window.addEventListener('message', event => {
     worker.onmessage = e => {
       if (finished) return;
       port.postMessage(e.data);
-      if (e.data.type !== 'python-progress' && e.data.type !== 'python-output') cleanup();
+      if (e.data.type !== 'python-progress' && e.data.type !== 'python-output' && e.data.type !== 'python-package-request') cleanup();
     };
     worker.onerror = e => fail(new Error(e.message || 'Worker не смог загрузить локальные файлы'));
     worker.onmessageerror = () => fail(new Error('не удалось прочитать сообщение Worker'));

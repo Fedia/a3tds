@@ -95,6 +95,21 @@
     "unvendored_tests": false,
     "version": "0.2.3"
   },
+  "micropip": {
+    "depends": [
+      "packaging"
+    ],
+    "file_name": "micropip-0.9.0-py3-none-any.whl",
+    "imports": [
+      "micropip"
+    ],
+    "install_dir": "site",
+    "name": "micropip",
+    "package_type": "package",
+    "sha256": "034f22763607744f982d2911170c50b496a38b8ba0535e5a09618475b1d7b051",
+    "unvendored_tests": false,
+    "version": "0.9.0"
+  },
   "numpy": {
     "depends": [],
     "file_name": "numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl",

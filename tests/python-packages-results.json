@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-02",
+  "version": "0.6.0",
+  "environment": "Chromium Linux, real isolated Worker/Pyodide and real PyPI/CDN assets. HTTPS forwarded by Playwright through TLS-verified urllib using configured managed proxy/CA, because Chromium does not trust the private proxy CA. No disabled certificate verification. Parent and sandbox CSP taken from manifest.",
+  "realDeepSeekVerified": false,
+  "titaniumDeviceVerified": false,
+  "extensionLoadVerified": false,
+  "passed": [
+    "top-level await micropip.install downloads pinned PyPI wheel and dependency; imported code executes",
+    "compiled wordcloud for the pinned Pyodide ABI loads from CDN, uses local matplotlib and creates PNG",
+    "query payload, remote JS and POST blocked before outgoing network requests",
+    "live download progress is visible; cancellation interrupts a pending package request and removes the Worker"
+  ]
+}

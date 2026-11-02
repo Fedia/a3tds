@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Агент для DeepSeek",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "minimum_chrome_version": "120",
   "description": "Локальный браузерный агент с веб-чатом DeepSeek и Python",
   "permissions": [
@@ -22,7 +22,7 @@
     "default_title": "ПсихоАгент"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; worker-src 'self'; connect-src 'self'; base-uri 'none';",
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; worker-src 'self'; connect-src 'self' https://pypi.org https://files.pythonhosted.org https://cdn.jsdelivr.net; base-uri 'none';",
     "sandbox": "sandbox allow-scripts; script-src 'self' chrome-extension: 'wasm-unsafe-eval'; object-src 'none'; worker-src blob:; connect-src chrome-extension:; base-uri 'none';"
   },
   "sandbox": {

@@ -38,6 +38,43 @@ WebAssembly.instantiateStreaming = async (source, imports, options) => {
     throw error;
   }
 };
+const nativeFetch = self.fetch.bind(self);
+const packageReplies = new Map(),
+  remoteWheels = new Map();
+let packageRequestId = 0,
+  started = false;
+// Python keeps its restrictive CSP. Only the parent package downloader has network access.
+self.fetch = async (input, options = {}) => {
+  const url = new URL(input?.url || String(input), self.PSY_BASE);
+  const vendor = new URL('vendor/pyodide/', self.PSY_BASE).href;
+  let remote = null;
+  if (url.href.startsWith(vendor)) remote = remoteWheels.get(decodeURIComponent(url.pathname.split('/').at(-1)));
+  else if (!url.href.startsWith(self.PSY_BASE)) remote = url.href;
+  if (!remote) return nativeFetch(input, options);
+  const method = String(options.method || input?.method || 'GET').toUpperCase();
+  if (method !== 'GET' || options.body || input?.body) throw new Error('Загрузчик Python разрешает только скачивание пакетов');
+  const id = ++packageRequestId;
+  const reply = new Promise((resolve, reject) => packageReplies.set(id, {
+    resolve,
+    reject
+  }));
+  postMessage({
+    type: 'python-package-request',
+    id,
+    url: remote
+  });
+  const message = await reply;
+  const response = new Response(message.bytes, {
+    status: 200,
+    headers: {
+      'Content-Type': message.contentType
+    }
+  });
+  Object.defineProperty(response, 'url', {
+    value: remote
+  });
+  return response;
+};
 postMessage({
   type: 'python-progress',
   phase: 'bootstrap'
@@ -47,6 +84,16 @@ let py;
 onmessage = async ({
   data
 }) => {
+  if (data.type === 'python-package-response') {
+    const waiting = packageReplies.get(data.id);
+    if (waiting) {
+      packageReplies.delete(data.id);
+      data.ok ? waiting.resolve(data) : waiting.reject(new Error(data.error));
+    }
+    return;
+  }
+  if (started) return;
+  started = true;
   let stdout = '',
     stderr = '',
     stdoutTruncated = false,
@@ -58,6 +105,11 @@ onmessage = async ({
       type: 'python-progress',
       phase: 'runtime'
     });
+    const vendor = new URL('vendor/pyodide/', self.PSY_BASE);
+    const [lock, bundled] = await Promise.all([nativeFetch(new URL('pyodide-lock.json', vendor)).then(r => r.json()), nativeFetch(new URL('PACKAGES.json', vendor)).then(r => r.json())]);
+    const local = new Set(Object.values(bundled).map(p => p.file_name));
+    for (const p of Object.values(lock.packages))
+      if ((p.file_name.endsWith('.whl') || p.package_type === 'shared_library') && !local.has(p.file_name)) remoteWheels.set(p.file_name, 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/' + p.file_name);
     py = await loadPyodide({
       indexURL: new URL('vendor/pyodide/', self.PSY_BASE).href,
       stdout: s => {
@@ -111,7 +163,6 @@ onmessage = async ({
     }
     py.globals.set('input_paths', JSON.stringify(inputs));
     py.globals.set('input_json', JSON.stringify(data.data));
-    py.globals.set('user_code', data.code);
     py.globals.set('__agent_progress', text => {
       if (Date.now() - lastProgress >= 250) {
         postMessage({
@@ -126,7 +177,7 @@ onmessage = async ({
       type: 'python-progress',
       phase: 'running'
     });
-    const result = await py.runPythonAsync(`
+    await py.runPythonAsync(`
 import json, os, sys, traceback
 os.environ['MPLBACKEND'] = 'Agg'
 # A fresh worker per command: no prior task data or native filesystem mount.
@@ -137,9 +188,9 @@ inputs = json.loads(input_paths)
 result = None
 def progress(value):
     __agent_progress(json.dumps(value, ensure_ascii=False, default=str))
-exec(compile(user_code, '<agent>', 'exec'), globals())
-json.dumps(result, ensure_ascii=False, allow_nan=False)
 `);
+    await py.runPythonAsync(data.code);
+    const result = await py.runPythonAsync('json.dumps(result, ensure_ascii=False, allow_nan=False)');
     postMessage({
       type: 'python-progress',
       phase: 'exporting'
