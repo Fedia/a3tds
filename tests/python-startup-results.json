@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-02",
+  "version": "0.5.0",
+  "environment": "Chromium Linux; actual sandbox, Worker, WASM; simulated startup failures",
+  "realDeepSeekVerified": false,
+  "titaniumDeviceVerified": false,
+  "extensionLoadVerified": false,
+  "passed": [
+    "missing sandbox ready: explicit diagnostic deadline and cleanup",
+    "synchronous Worker creation failure returned immediately",
+    "failed WASM fetch returned as interpreter startup error",
+    "delayed interpreter startup does not consume explicit diagnostic execution budget",
+    "standard-library code loads no wheels; pandas omits matplotlib",
+    "missing instantiateStreaming: same local WASM succeeds through byte instantiation",
+    "incorrect WASM MIME: same local WASM succeeds through byte instantiation",
+    "cancellation during interpreter startup clears the frame"
+  ]
+}

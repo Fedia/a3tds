@@ -409,12 +409,20 @@ test('Pyodide: pandas, статистика, matplotlib, файл и изоля�
     }, 90000);
   assert(r.result.total === 6 && r.files[0].bytes[0] === 137, 'Python/PNG');
 });
+test('Python: простой код без тяжёлых библиотек, этапы запуска и отдельное время вычисления', async()=>{
+  const p=new PythonRuntime(), phases=[];p.onProgress=phase=>phases.push(phase);
+  const r=await p.run("import sys\nresult={'sum':sum(data),'heavy':[name for name in ['numpy','pandas','matplotlib'] if name in sys.modules]}",[1,2,3],1000);
+  assert(r.result.sum===6&&r.result.heavy.length===0,'Простой код не загружает NumPy/pandas/matplotlib');
+  assert(['sandbox','worker','bootstrap','runtime','packages','inputs','running','exporting'].every(x=>phases.includes(x)),'Все этапы различимы');
+  assert(!p.worker,'Среда очищена после выполнения');
+});
 test('Python: таймаут и остановка завершают Worker', async () => {
   const p = new PythonRuntime();
   await fail(() => p.run('while True: pass', {}, 200));
   assert(!p.worker, 'Worker завершён');
   let running = false;
-  p.onProgress = () => {
+  p.onProgress = phase => {
+    if (phase !== 'running') return;
     running = true;
     setTimeout(() => p.cancel(), 200);
   };
@@ -422,6 +430,61 @@ test('Python: таймаут и остановка завершают Worker', a
   await fail(() => wait);
   assert(running, 'Прервано уже выполняющееся вычисление');
 });
+test('Python jobs: живой прогресс/вывод, другие инструменты, файлы и защита от повторного запуска', async()=>{
+  const runtime=new PythonRuntime();let runs=0;const run=runtime.run.bind(runtime);runtime.run=(...args)=>{runs++;assert(args[2]===null,'Нет автоматического таймаута вычисления');return run(...args)};
+  let scrolled=false;
+  const cc=new AgentController({store,files,browser:{detach:async()=>{},execute:async()=>{scrolled=true;return {scrolled:true}}},model:{cancel(){}},python:runtime});
+  await cc.create('Фоновый Python');
+  const cmd=command('background','python.run',{data:{},code:'import time\nprogress({"done":0,"total":2})\nprint("Первая часть")\ntime.sleep(1)\nprogress({"done":1,"total":2})\nprint("Вторая часть")\ntime.sleep(1)\nopen("done.txt","w").write("готово")\nresult={"value":42}'});
+  const job=await cc.execute(cmd);assert(job.status==='running','Вызов возвращается до окончания кода');
+  await cc.execute(command('parallel-scroll','browser.scroll',{tabId:1,delta:100}));assert(scrolled,'Браузер доступен во время вычисления');
+  let progress=false,output;
+  for(let i=0;i<100;i++){output=await cc.execute(command('poll-'+i,'python.status',{jobId:job.jobId,waitMs:100}));if(output.progress?.done===1&&output.stdout.includes('Вторая часть'))progress=true;if(output.status!=='running')break;}
+  assert(progress&&output.status==='completed'&&output.result.value===42,'Модель видит прогресс, stdout и окончательный результат');
+  assert((await files.read(output.files[0].path)).text==='готово','Выходной файл сохранён автоматически');
+  cc.s.pending={command:cmd};await cc.recoverPending();assert(cc.s.last.status==='ok'&&runs===1,'Прерванная квитанция не перезапускает Python');
+  await fail(()=>cc.execute(command('foreign','python.status',{jobId:'other-task-job',waitMs:0})));
+});
+test('Python jobs: отмена, запрет преждевременного finish и восстановление потерянного Worker', async()=>{
+  let rejectRun,runs=0,limit;
+  const runtime={run:(_code,_data,time)=>{runs++;limit=time;return new Promise((_,reject)=>{rejectRun=reject})},cancel(){rejectRun?.(new Error('Python прерван пользователем'))}};
+  const cc=new AgentController({store,files,browser:{detach:async()=>{}},model:{cancel(){}},python:runtime});await cc.create('Долгое вычисление');
+  const job=await cc.execute(command('long-job','python.run',{code:'while True: pass',data:{}}));
+  for(let i=0;i<100&&!rejectRun;i++)await sleep(5);
+  assert(rejectRun&&limit===null,'Никакие 60 секунд не задаются');
+  await fail(()=>cc.execute(command('too-early','task.finish',{summary:'готово'})));
+  cc.pythonJobs().jobs.get(job.jobId).record.started-=120000;
+  assert((await cc.execute(command('long-status','python.status',{jobId:job.jobId,waitMs:0}))).status==='running','Само время не означает зависание');
+  const cancelled=await cc.execute(command('cancel-job','python.cancel',{jobId:job.jobId}));assert(cancelled.status==='cancelled'&&runs===1,'Отмена не перезапускает код');
+  await cc.create('После перезагрузки');const id=cc.s.id;
+  cc.s.pythonJobs={lost:{jobId:'lost',status:'running'}};await cc.save();
+  await store.put('python-job:'+id+':lost',{taskId:id,jobId:'lost',status:'running',phase:'running',started:Date.now()-10000,updated:Date.now()-10000});
+  const fresh=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:{run(){throw new Error('Нельзя повторять')},cancel(){}}});fresh.s=await store.get('task');
+  const lost=await fresh.execute(command('lost-status','python.status',{jobId:'lost',waitMs:0}));assert(lost.status==='interrupted'&&lost.error.code==='WORKER_LOST','Перезагрузка обозначена явно, код не повторён');
+});
+test('Python jobs: результат переживает ошибку экспорта; фоновая запись не перетирает новую задачу', async()=>{
+  const outcome={stdout:'ok',stderr:'',result:{n:1},files:[{path:'durable.txt',bytes:new TextEncoder().encode('KEEP')}],stdoutTruncated:false,stderrTruncated:false};
+  let resolveRun,runs=0;
+  const runtime={run(){runs++;return new Promise(resolve=>{resolveRun=resolve})},cancel(){}};
+  const cc=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:runtime});await cc.create('Надёжный результат');
+  const job=await cc.execute(command('durable-python','python.run',{code:'result=1',data:{}}));for(let i=0;i<100&&!resolveRun;i++)await sleep(5);
+  const write=files.write.bind(files);files.write=async()=>{throw new Error('Папка временно недоступна')};
+  resolveRun(outcome);await cc.pythonJobs().jobs.get(job.jobId).completion;
+  files.write=write;
+  const staged=await store.get('python-job:'+cc.s.id+':'+job.jobId);assert(staged.outcome.files[0].bytes.length===4,'Полный результат сохранён до выгрузки');
+  const fresh=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:{cancel(){},run(){throw new Error('Нельзя повторять')}}});fresh.s=await store.get('task');
+  const saved=await fresh.execute(command('export-recovery','python.status',{jobId:job.jobId,waitMs:0}));assert((await files.read(saved.files[0].path)).text==='KEEP'&&runs===1,'После восстановления нужен только экспорт');
+  // A result from an old frame patches its archive, never the active task object.
+  await store.put('archive-'+fresh.s.id,fresh.s);const next=StateStore.fresh('Новая активная задача');await store.save(next);
+  await fresh.pythonJobs().publish(await fresh.pythonJobs().get(job.jobId));
+  assert((await store.get('task')).id===next.id&&(await store.get('archive-'+fresh.s.id)).pythonJobs[job.jobId].status==='completed','Новая задача не потеряна из-за фонового результата');
+  await store.putPythonJob('python-job:'+fresh.s.id+':'+job.jobId,staged);
+  const nextController=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:{cancel(){},run(){throw new Error('Нельзя повторять')}}});nextController.s=next;
+  files.write=async()=>{throw new Error('Не следует повторно записывать уже сохранённый файл')};
+  try{await nextController.pythonJobs().flushPending();}finally{files.write=write;}
+  assert((await store.get('python-export-queue')).length===0&&(await store.get('task')).id===next.id&&runs===1,'Архивная выгрузка доведена до конца без повторного Python и дубликатов');
+});
+
 test('Сквозной цикл с тестовой моделью: корпус → Python → CSV/отчёт; duplicate guard', async () => {
   let calls = 0;
   let id;
@@ -464,6 +527,7 @@ test('Сквозной цикл с тестовой моделью: корпус
         }],
         report: '# Тестовый отчёт\nОдин документ. Разметка ИИ.'
       }));
+      if(c.s.pythonJobs?.python?.status==='running')return JSON.stringify(command('python-status-'+calls,'python.status',{jobId:'python',waitMs:15000}));
       return JSON.stringify(command('finish', 'task.finish', {
         summary: 'Тест завершён'
       }));
@@ -615,10 +679,11 @@ test('Ошибка Python возвращается модели; следующ�
   let calls=0, runs=0;
   const cc=new AgentController({store,files,browser:{detach:async()=>{}},python:{cancel(){},async run(){runs++;throw new Error('Python timeout');}},
     model:{async exchange(prompt){calls++;if(calls===1)return JSON.stringify(command('py-fail','python.run',{code:'result=1',data:{}}));
-      assert(prompt.includes('OUTCOME_UNCONFIRMED'),'Модель получает ошибку');
+      if(calls===2)return JSON.stringify(command('check-failure','python.status',{jobId:'py-fail',waitMs:15000}));
+      assert(prompt.includes('PYTHON_FAILED'),'Модель получает причину ошибки фоновой задачи');
       return JSON.stringify(command('done','task.finish',{summary:'Вычисление не удалось, использую доступные данные'}));}}});
   await cc.create('python failure');await cc.start();
-  assert(cc.s.status==='completed' && runs===1 && calls===2 && !cc.s.pending,'Цикл продолжен, вычисление не повторено');
+  assert(cc.s.status==='completed' && runs===1 && calls===3 && !cc.s.pending,'Цикл продолжен, вычисление не повторено');
 });
 test('DeepSeek: восстановление отправленного ответа без повторного клика', async () => {
   const adapter=new DeepSeekAdapter(store);let sends=0;
@@ -680,6 +745,8 @@ test('Длительная задача: продолжение после пр�
   cc.model.exchange=async()=>{calls++;return JSON.stringify(command('duplicate-loop','browser.scroll',{tabId:1,delta:42}))};
   await cc.create('Проверка повторяющейся команды');await cc.start();
   assert(cc.s.status==='paused'&&runs===1&&calls===4&&cc.s.reason.includes('Повторяющиеся'),'Повтор выполненного id не создаёт бесконечный цикл и не выполняется заново');
+  cc.model.exchange=async()=>JSON.stringify(command('after-loop','task.finish',{summary:'Продолжено'}));await cc.start();
+  assert(cc.s.status==='completed'&&runs===1,'Продолжение не застревает на старом дублирующемся ответе');
 });
 test('DeepSeek: большое сообщение не отклоняется искусственным порогом расширения', async()=>{
   const adapter=new DeepSeekAdapter(store);let inserted='';
@@ -733,9 +800,10 @@ test('Страницы → план → сохранённые файлы → о
     const reloaded=await new StateStore('psy-agent-tests').init();const saved=await reloaded.get('task');
     assert(saved.status==='stopped'&&paths.every(p=>saved.files.includes(p)),'Остановка и перезагрузка не теряют сбор');
     cc.s=StateStore.recover(saved);cc.s.status='paused';b.state=cc.s;
-    const output=await cc.execute(command('CON','python.run',{data:{},files:paths.map((path,i)=>({path,name:'page'+i+'.json'})),code:
+    const job=await cc.execute(command('CON','python.run',{data:{},files:paths.map((path,i)=>({path,name:'page'+i+'.json'})),code:
       'import json, pandas as pd\ndocs=[json.load(open(inputs[name],encoding="utf-8")) for name in sorted(inputs)]\nrows=[r["fields"] for d in docs for r in d["records"]]\ndf=pd.DataFrame(rows)\ndf["rating"]=pd.to_numeric(df["rating"])\ndf.to_csv("reviews.csv",index=False)\nresult={"rows":len(df),"mean":float(df["rating"].mean()),"full_text": "BODY_SENTINEL_AFTER_PREVIEW" in df.iloc[-1]["text"]}'
     }));
+    let output;for(let i=0;i<5;i++){output=await cc.execute(command('check-CON-'+i,'python.status',{jobId:job.jobId,waitMs:15000}));if(output.status!=='running')break;}
     assert(output.result.rows===3&&output.result.mean===4&&output.result.full_text,'Worker обработал полные локальные файлы');
     assert(output.files[0].path.endsWith('/reviews.csv')&&(await files.read(output.files[0].path)).text.includes('Ирина'),'CSV сохранён в папке');
     const old=cc.s.id;await cc.create('Новая задача');

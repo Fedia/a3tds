@@ -38,6 +38,63 @@ export class StateStore {
       tx.onabort = () => reject(tx.error);
     });
   }
+  async putPythonJob(key, record) {
+    const snapshot = structuredClone(record);
+    await new Promise((resolve, reject) => {
+      const tx = this.db.transaction('kv', 'readwrite'),
+        kv = tx.objectStore('kv'),
+        q = kv.get('python-export-queue');
+      q.onsuccess = () => {
+        const queue = q.result || [];
+        kv.put(snapshot, key);
+        kv.put(snapshot.outcome ? [...new Set([...queue, key])] : queue.filter(item => item !== key), 'python-export-queue');
+      };
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+  async recordOwnedFile(path, digest) {
+    await new Promise((resolve, reject) => {
+      const tx = this.db.transaction('kv', 'readwrite'),
+        kv = tx.objectStore('kv'),
+        q = kv.get('owned-files');
+      q.onsuccess = () => {
+        const owners = q.result || {};
+        owners[path] = digest;
+        kv.put(owners, 'owned-files');
+      };
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+  /** Patch only job metadata/files; a background result must never overwrite a newer task. */
+  async patchPythonJob(taskId, jobId, view, paths = []) {
+    await new Promise((resolve, reject) => {
+      const tx = this.db.transaction('kv', 'readwrite'),
+        kv = tx.objectStore('kv');
+      const patch = (key, state) => {
+        if (state?.id === taskId) {
+          state.pythonJobs ??= {};
+          state.pythonJobs[jobId] = view;
+          state.files = [...new Set([...state.files, ...paths])];
+          kv.put(state, key);
+        }
+      };
+      const request = kv.get('task');
+      request.onsuccess = () => {
+        if (request.result?.id === taskId) patch('task', request.result);
+        else {
+          const archived = kv.get('archive-' + taskId);
+          archived.onsuccess = () => patch('archive-' + taskId, archived.result);
+        }
+      };
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
   async save(s) {
     await this.put('task', structuredClone(s));
     if (this.name === 'psy-agent') {

@@ -66,9 +66,10 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await chat.evaluate('''() => {
    let n=0;
    document.querySelector('#send').onclick=()=>{
-    document.querySelector('#composer').value='';const stop=document.createElement('button');stop.setAttribute('aria-label','Stop generating');document.body.append(stop);
+    const prompt=document.querySelector('#composer').value;document.querySelector('#composer').value='';const stop=document.createElement('button');stop.setAttribute('aria-label','Stop generating');document.body.append(stop);
     setTimeout(()=>{n++;const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';
-     const command=n===1?{id:'py',tool:'python.run',args:{code:'result = {"sum": sum(data["values"])}',data:{values:[1,2,3]}},description:'Сумма'}:{id:'finish',tool:'task.finish',args:{summary:'Сумма равна 6'},description:'Готово'};
+     let state={};try{state=JSON.parse(prompt.split('Состояние: ')[1])}catch{};
+     const command=n===1?{id:'py',tool:'python.run',args:{code:'result = {"sum": sum(data["values"])}',data:{values:[1,2,3]}},description:'Сумма'}:state.last?.data?.result?.sum!==6?{id:'status-'+n,tool:'python.status',args:{jobId:'py',waitMs:15000},description:'Проверить вычисление'}:{id:'finish',tool:'task.finish',args:{summary:'Сумма равна 6'},description:'Готово'};
      answer.append(document.createTextNode(JSON.stringify(command)));const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');copy.textContent='Copy';answer.append(copy);document.querySelector('#answers').append(answer);stop.remove();
     },100);
    };
@@ -102,7 +103,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
     const old=await store.get('archive-'+oldTaskId); const current=await store.get('task');
     return !!old.pending && !!old.outbound && current.id!==old.id && !current.commands['old-command'];
   }""")
-  assert await chat.locator('.answer').count()==2
+  assert await chat.locator('.answer').count()>=3
   await chat.wait_for_selector('.psy-agent-final')
   assert await chat.locator('.psy-agent-final').inner_text() == 'Сумма равна 6'
   await chat.wait_for_selector('.psy-agent-step')
@@ -118,7 +119,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await settings.locator('#files-toggle').click();await settings.wait_for_selector('#files button')
   assert await settings.evaluate('document.documentElement.scrollWidth <= innerWidth')
   async with settings.expect_download() as pending:
-   await settings.locator('#files button').first.click()
+   await settings.locator('#files li').filter(has_text='python-result-py.json').locator('button').click()
   download=await pending.value;await download.save_as(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json'))
   assert json.load(open(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json')))['result']['sum']==6
   await settings.close()
@@ -129,7 +130,11 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    if shared.get('summary',{}).get('message')=='loop':break
    await asyncio.sleep(.2)
   assert shared['summary']['message']=='loop'
-  await asyncio.sleep(2)
+  for i in range(100):
+   if shared.get('summary',{}).get('status')=='paused':break
+   await asyncio.sleep(.2)
+  assert shared['summary']['status']=='paused',shared['summary']
+  await asyncio.sleep(.2)
   await frame.evaluate("window.testRuntimeToken='unchanged'")
   await chat.evaluate("const h=document.createElement('header');h.className='the-header';document.body.prepend(h)")
   await chat.wait_for_timeout(300)
@@ -155,7 +160,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   assert shared['summary']['status']=='completed',shared['summary']
   assert await frame.evaluate("""async expected=>{
     const {StateStore}=await import('./src/state-store.js'); const s=await(await new StateStore().init()).get('task');
-    return s.id===expected && s.commands.loop.result.status==='error' && !s.pending;
+    return s.id===expected && s.commands.loop.result.status==='ok' && s.pythonJobs.loop.status==='cancelled' && !s.pending;
   }""",old_id)
   print('PASS: continue in chat restores the same stopped task, seals old Python outcome, and finishes without settings',flush=True)
   print('PASS: internal file download, denied direct executor message, stop through chat toggle',flush=True)

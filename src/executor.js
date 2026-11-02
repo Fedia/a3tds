@@ -119,7 +119,18 @@ async function runLocked(message, respond) {
         // A new task archives uncertainty; it never resumes or retries the old command.
         assert(typeof message.task === 'string' && message.task.trim() && message.task.length <=
           20000, 'Задача пуста или слишком длинная');
-        if (controller.s) await store.put('archive-' + controller.s.id, controller.s);
+        await chrome.runtime.sendMessage({
+          type: 'cancel-previous-python',
+          currentTabId: tabId
+        });
+        if (controller.s) {
+          controller.s = StateStore.recover(await store.get('task'));
+          browser.state = controller.s;
+        }
+        if (controller.s) {
+          await controller.pythonJobs().cancelActive('Начата новая задача');
+          await store.put('archive-' + controller.s.id, controller.s);
+        }
         await controller.create(message.task);
         controller.s.modelTabId = tabId;
         controller.s.modelChatURL = (await chrome.tabs.get(tabId)).url;
@@ -196,6 +207,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         ok: true,
         data: {
           active: locks.held.some(l => l.name === 'psy-agent-execution'),
+          computing: !!python.worker || [...(python.jobs?.jobs.values() || [])].some(job => job.record.status === 'running' || job.exporting),
           capabilities: capabilities(),
           status: saved?.status,
           reason: saved?.reason,
@@ -204,10 +216,17 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       });
       return;
     }
+    if (message.command === 'cancel-python-only') {
+      if (python.jobs?.state.id === message.taskId) await python.jobs.cancelActive('Начата задача в другом чате');
+      respond({
+        ok: true
+      });
+      return;
+    }
     if (message.command === 'chat-stop') {
       agentEnabled = false;
       cancellation++;
-      if (controller && (handling || controller.running)) await controller.stop();
+      if (controller && (handling || controller.running || python.worker || [...(python.jobs?.jobs.values() || [])].some(job => job.record.status === 'running'))) await controller.stop();
       respond({
         ok: true
       });

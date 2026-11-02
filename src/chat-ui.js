@@ -12,7 +12,8 @@
     stateLabel,
     progressText,
     shortReason,
-    belongsToChat
+    belongsToChat,
+    pythonHistoryEntry
   } = await import(chrome.runtime.getURL('src/ui-state.js'));
   let enabled = false,
     busy = false,
@@ -22,6 +23,7 @@
     currentState = null,
     finals = [],
     histories = [],
+    pythonViews = {},
     lastURL = location.href;
   // The executor has a stable root. Moving the toolbar during SPA layout changes must not reload it.
   const engineHost = document.createElement('div');
@@ -85,7 +87,7 @@
   const acceptedFinals = () => finals.filter(item => item.chatURL === location.href);
   const view = () => mountFinalAnswers(() => deepseekDOM('answer-elements', config), {
     getFinals: acceptedFinals,
-    getHistory: () => histories.filter(item => item.chatURL === location.href).flatMap(item => item.entries),
+    getHistory: () => histories.filter(item => item.chatURL === location.href).flatMap(item => item.entries.map(entry => pythonHistoryEntry(entry, pythonViews[item.taskId]?.[entry.commandId]))),
     color: nativeColor
   });
   let unmountView = () => {};
@@ -169,6 +171,9 @@
     currentState = values.summary || null;
     finals = values['ui-finals'] || [];
     histories = values['ui-history'] || [];
+    const ids = [...new Set([currentState?.taskId, ...histories.map(item => item.taskId)].filter(Boolean))];
+    const jobs = ids.length ? await chrome.storage.local.get(ids.map(id => 'python-ui:' + id)) : {};
+    pythonViews = Object.fromEntries(ids.map(id => [id, jobs['python-ui:' + id] || {}]));
   }
   async function ensureExecutor() {
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -192,13 +197,19 @@
   void ensureExecutor().catch(() => {});
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    let pythonChanged = false;
+    for (const [key, value] of Object.entries(changes))
+      if (key.startsWith('python-ui:')) {
+        pythonViews[key.slice(10)] = value.newValue || {};
+        pythonChanged = true;
+      }
     if (changes['chat-bindings']) config = changes['chat-bindings'].newValue || {};
     if (changes.summary) currentState = changes.summary.newValue || null;
     if (changes['ui-history']) histories = changes['ui-history'].newValue || [];
     if (changes['ui-finals']) finals = changes['ui-finals'].newValue || [];
     if (changes.summary) transient = '';
     paint();
-    if (changes['ui-finals'] || changes['ui-history'] || changes.summary) unmountView.refresh?.();
+    if (pythonChanged || changes['ui-finals'] || changes['ui-history'] || changes.summary) unmountView.refresh?.();
   });
   settings.onclick = () => send({
     type: 'open-workspace'

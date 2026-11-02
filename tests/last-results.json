@@ -1,8 +1,8 @@
 {
   "date": "2026-11-02",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 33,
+  "passed": 37,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -69,7 +69,23 @@
       "ok": true
     },
     {
+      "name": "Python: простой код без тяжёлых библиотек, этапы запуска и отдельное время вычисления",
+      "ok": true
+    },
+    {
       "name": "Python: таймаут и остановка завершают Worker",
+      "ok": true
+    },
+    {
+      "name": "Python jobs: живой прогресс/вывод, другие инструменты, файлы и защита от повторного запуска",
+      "ok": true
+    },
+    {
+      "name": "Python jobs: отмена, запрет преждевременного finish и восстановление потерянного Worker",
+      "ok": true
+    },
+    {
+      "name": "Python jobs: результат переживает ошибку экспорта; фоновая запись не перетирает новую задачу",
       "ok": true
     },
     {

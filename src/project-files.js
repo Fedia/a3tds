@@ -180,8 +180,7 @@ export class ProjectFiles {
       await stream.abort().catch(() => {});
       throw e;
     }
-    owners[actual] = await hash(text);
-    await this.store.put('owned-files', owners);
+    await this.store.recordOwnedFile(actual, await hash(text));
     return {
       path: actual,
       characters: text.length

@@ -1,4 +1,7 @@
 import {
+  pythonJobKey
+} from './python-jobs.js';
+import {
   hash
 } from './util.js';
 
@@ -44,6 +47,15 @@ export async function recoverTool(controller, command, message = 'Выполне
   const args = command.args;
   try {
     if (command.tool === 'task.finish') {
+      if (await controller.pythonJobs().hasActive()) return {
+        id: command.id,
+        status: 'error',
+        error: {
+          code: 'PYTHON_RUNNING',
+          message: 'Python ещё выполняется. Проверь python.status.'
+        }
+      };
+      await controller.pythonJobs().flush();
       state.status = 'completed';
       state.reason = args.summary;
       return {
@@ -103,8 +115,20 @@ export async function recoverTool(controller, command, message = 'Выполне
           }
         };
       }
+    } else if (command.tool === 'python.run' && await store.get(pythonJobKey(state.id, command.id))) {
+      return {
+        id: command.id,
+        status: 'ok',
+        data: await controller.pythonJobs().status(command.id, 0)
+      };
+    } else if (['python.status', 'python.cancel'].includes(command.tool)) {
+      return {
+        id: command.id,
+        status: 'ok',
+        data: await controller.pythonJobs().status(args.jobId, 0)
+      };
     } else if (command.tool === 'python.run') {
-      python.cancel(); // A lost worker result is never recovered by replaying Python.
+      if (!python.jobs?.jobs.size) python.cancel(); // Never cancel a different, tracked job.
     } else if (['browser.click', 'browser.type', 'browser.scroll'].includes(command.tool)) {
       state.blockedInteractions ??= [];
       if (!state.blockedInteractions.includes(args.tabId)) state.blockedInteractions.push(args.tabId);

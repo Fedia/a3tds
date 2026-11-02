@@ -14,12 +14,26 @@ export function stateLabel(state) {
   } [state.status] || 'Готов';
 }
 export function shortReason(reason = '') {
+  if (/^Python:/i.test(reason)) return reason.trim().split('\n')[0].slice(0, 200);
   if (/captcha|участи[ея] пользователя|провер.*человек/i.test(reason)) return 'Нужна проверка в DeepSeek.';
   if (/требуется вход|войдите|login/i.test(reason)) return 'Войдите в DeepSeek.';
   if (/папк|хранилищ|разрешени/i.test(reason)) return 'Нужен доступ к хранилищу результатов.';
   if (/DeepSeek|отправк|ответ|чат/i.test(reason)) return 'Не удалось прочитать ответ DeepSeek.';
   return reason.replace(/Агент приостановлен:\s*/gi, '').split(/Можно\s+(?:позже\s+)?написать/i)[0]
     .trim().slice(0, 160) || 'Работа приостановлена.';
+}
+export function pythonPhaseText(phase) {
+  return {
+    queued: 'Python ожидает запуска…',
+    sandbox: 'Подготавливаю среду Python…',
+    worker: 'Запускаю Python…',
+    bootstrap: 'Загружаю файлы Python…',
+    runtime: 'Загружаю интерпретатор Python…',
+    packages: 'Подготавливаю нужные библиотеки…',
+    inputs: 'Передаю данные в Python…',
+    running: 'Выполняю Python-код…',
+    exporting: 'Собираю результаты Python…'
+  } [phase] || '';
 }
 export function progressText(state) {
   if (!state) return '';
@@ -33,7 +47,7 @@ export function progressText(state) {
     checking: 'Читаю готовый ответ DeepSeek…'
   } [state.phase];
   if (waiting) return saved + waiting + (state.waitElapsed >= 5 ? ` ${state.waitElapsed} с` : '');
-  return saved + (state.current || 'Выполняю задачу…');
+  return saved + (pythonPhaseText(state.pythonPhase) || state.current || 'Выполняю задачу…');
 }
 export function belongsToChat(state, url, tabId) {
   if (!state || state.ownerTabId !== tabId) return false;
@@ -68,25 +82,51 @@ function resultText(command, result) {
   if (command.tool === 'python.run') return 'Вычисление завершено.' + (d.files?.length ? ` Создано файлов: ${d.files.length}.` : '');
   return 'Действие выполнено.';
 }
+export function pythonHistoryEntry(entry, job) {
+  if (!job) return entry;
+  const status = {
+    running: 'running',
+    completed: 'ok',
+    failed: 'error',
+    cancelled: 'interrupted',
+    interrupted: 'interrupted'
+  } [job.status] || 'running';
+  let detail = '';
+  if (status === 'running') {
+    const p = job.progress;
+    const progress = typeof p === 'string' ? p : typeof p === 'number' ? String(p) : p && typeof p === 'object' ?
+      (Number.isFinite(p.done) && Number.isFinite(p.total) ? `Обработано ${p.done} из ${p.total}` : Object.entries(p).slice(0, 4).map(([k, v]) => `${k}: ${v===null?'—':typeof v==='object'?'…':String(v).slice(0,80)}`).join(' · ')) : '';
+    detail = [pythonPhaseText(job.phase) || 'Python выполняется…', progress, `${job.elapsedSeconds||0} с`].filter(Boolean).join(' · ');
+  } else if (job.error) detail = shortReason(job.error.message);
+  else if (job.exportPending) detail = 'Вычисление завершено; результаты сохранены локально, выгрузка в папку ожидается.';
+  else detail = 'Вычисление завершено.' + (job.files?.length ? ` Создано файлов: ${job.files.length}.` : '');
+  return {
+    ...entry,
+    status,
+    detail
+  };
+}
 export function projectHistory(state) {
   const entries = Object.values(state.commands || {}).filter(x => x.command.tool !== 'task.finish').map(({
     command,
     result
-  }) => ({
+  }) => pythonHistoryEntry({
+    hidden: command.tool === 'python.status',
     commandId: command.id,
     key: commandUIKey(command),
     description: command.description,
     status: result?.status === 'ok' ? 'ok' : 'error',
     detail: resultText(command, result)
-  }));
+  }, state.pythonJobs?.[command.id]));
   const command = state.pending?.command;
-  if (command && command.tool !== 'task.finish' && !state.commands?.[command.id]) entries.push({
+  if (command && command.tool !== 'task.finish' && !state.commands?.[command.id]) entries.push(pythonHistoryEntry({
+    hidden: command.tool === 'python.status',
     commandId: command.id,
     key: commandUIKey(command),
     description: command.description,
     status: state.status === 'running' ? 'running' : state.status === 'paused' ? 'paused' : 'interrupted',
-    detail: ''
-  });
+    detail: command.tool === 'python.run' ? pythonPhaseText(state.pythonPhase) : ''
+  }, state.pythonJobs?.[command.id]));
   return entries;
 }
 
@@ -104,6 +144,7 @@ export function projectTask(state) {
     status: state.status,
     phase: state.phase,
     waitElapsed: state.waitElapsed || 0,
+    pythonPhase: state.pending?.command.tool === 'python.run' ? state.pythonPhase : null,
     history: projectHistory(state),
     current: state.current || '',
     message: state.reason || state.current || '',

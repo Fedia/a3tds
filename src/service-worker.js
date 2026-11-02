@@ -21,6 +21,26 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     });
     return;
   }
+  if (message.type === 'cancel-previous-python' && sender.url === chrome.runtime.getURL('executor.html') && Number.isInteger(sender.tab?.id || message.currentTabId)) {
+    (async () => {
+      const {
+        summary
+      } = await chrome.storage.local.get('summary');
+      if (summary?.ownerTabId && summary.ownerTabId !== (sender.tab?.id || message.currentTabId)) await chrome.runtime.sendMessage({
+        type: 'executor-command',
+        targetTabId: summary.ownerTabId,
+        command: 'cancel-python-only',
+        taskId: summary.taskId
+      }).catch(() => {});
+      return {
+        ok: true
+      };
+    })().then(reply, e => reply({
+      ok: false,
+      error: e.message
+    }));
+    return true;
+  }
   const chat = sender.frameId === 0 && sender.tab && sender.url?.startsWith('https://chat.deepseek.com/');
   const settings = sender.url === chrome.runtime.getURL('workspace.html');
   if (message.type === 'open-workspace' && (chat || settings)) {

@@ -72,6 +72,12 @@ export const TOOLS = {
     code: s(30000),
     data: obj
   },
+  'python.status': {
+    jobId: s(80)
+  },
+  'python.cancel': {
+    jobId: s(80)
+  },
   'corpus.add': {
     tabId: integer(1, 1e9)
   },
@@ -95,6 +101,9 @@ const OPTIONAL = {
   },
   'python.run': {
     files: Array.isArray
+  },
+  'python.status': {
+    waitMs: integer(0, 15000)
   },
   'files.list': {
     path: v => typeof v === 'string' && v.length < 240

@@ -50,6 +50,13 @@ async function idle() {
     summary
   } = await chrome.storage.local.get('summary');
   if (summary?.status === 'running') assert(!(await command('status')).active, 'Сначала остановите агента в чате');
+  const task = await store.get('task');
+  if (Object.values(task?.pythonJobs || {}).some(job => job.status === 'running' || job.exportPending)) {
+    const owner = available.find(tab => tab.id === task.modelTabId);
+    if (owner) assert(!(await command('status', {
+      tabId: owner.id
+    })).computing, 'Сначала остановите Python переключателем «Агент» в чате');
+  }
 }
 async function tabs() {
   available = await chrome.tabs.query({

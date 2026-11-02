@@ -47,11 +47,11 @@ export function mountFinalAnswers(getAnswers, {
           command = JSON.parse(clean);
         } catch {}
         recognized = command && typeof command.tool === 'string' &&
-          /^(browser\.(open|snapshot|inspect|collect|click|type|scroll|extract)|files\.(list|read|write)|python\.run|task\.finish)$/.test(command.tool) ||
+          /^(browser\.(open|snapshot|inspect|collect|click|type|scroll|extract)|files\.(list|read|write)|python\.(run|status|cancel)|task\.finish)$/.test(command.tool) ||
           /^\{\s*"(?:id|tool|description|args)"\s*:/.test(clean);
         if (recognized && command) {
           step = history.findLast(item => item.key === commandUIKey(command));
-          if (step) text = step.description + '\n' + ({
+          if (step && !step.hidden) text = step.description + '\n' + ({
               running: 'Выполняется…',
               ok: 'Готово',
               error: 'Ошибка',
@@ -78,10 +78,10 @@ export function mountFinalAnswers(getAnswers, {
         signature,
         hidden: []
       };
-      const target = source;
+      const target = step?.hidden ? answer.turn || source : source;
       // Never collapse a live or unaccepted reply: virtualizers may unmount its
       // completion toolbar before the adapter has observed it. Keep its geometry.
-      const conceal = !answer.context && !text ? 'opacity:0!important;pointer-events:none!important' : collapsed;
+      const conceal = !answer.context && !text && !step ? 'opacity:0!important;pointer-events:none!important' : collapsed;
       // Keep DOM text and boxes available to the adapter while collapsing the visible turn.
       entry.hidden.push({
         node: target,

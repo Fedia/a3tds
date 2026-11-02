@@ -1,42 +1,54 @@
-// Opaque-origin sandbox: no extension APIs, IndexedDB or directory handles.
+// Opaque origin: no extension APIs, IndexedDB, directory handles or page commands.
 let initialized = false;
-window.addEventListener('message', e => {
-  if (e.source !== parent || e.data?.type !== 'python-start' || initialized || e.ports.length !== 1)
-    return;
+const nonce = location.hash.slice(1);
+window.addEventListener('message', event => {
+  if (event.source !== parent || event.data?.type !== 'python-start' || event.data.nonce !== nonce || initialized || event.ports.length !== 1) return;
   initialized = true;
-  const port = e.ports[0];
-  const base = new URL('.', location.href).href;
-  // Bootstrap contains only packaged URLs, never model-provided executable JS.
-  const bootstrap = 'self.PSY_BASE=' + JSON.stringify(base) + ';importScripts(' + JSON.stringify(new URL(
-    'src/python-worker.js', base).href) + ');';
-  const url = URL.createObjectURL(new Blob([bootstrap], {
-    type: 'text/javascript'
-  }));
-  const worker = new Worker(url);
-  worker.onmessage = event => {
-    port.postMessage(event.data);
-    if (event.data.type === 'python-progress') return;
-    worker.terminate();
-    URL.revokeObjectURL(url);
+  const port = event.ports[0];
+  let worker, url, finished = false;
+  const cleanup = () => {
+    finished = true;
+    worker?.terminate();
+    if (url) URL.revokeObjectURL(url);
   };
-  worker.onerror = event => {
+  const fail = error => {
+    if (finished) return;
     port.postMessage({
       ok: false,
-      error: event.message
+      error: 'Python: ' + (error?.message || String(error))
     });
-    worker.terminate();
-    URL.revokeObjectURL(url);
+    cleanup();
   };
-  port.onmessage = event => {
-    if (event.data?.type === 'cancel') {
-      worker.terminate();
-      URL.revokeObjectURL(url);
-    }
+  port.onmessage = e => {
+    if (e.data?.type === 'cancel') cleanup();
   };
   port.start();
-  worker.postMessage({
-    code: e.data.code,
-    data: e.data.data,
-    files: e.data.files || []
-  });
+  window.addEventListener('securitypolicyviolation', e => fail(new Error('загрузка заблокирована политикой браузера (' + e.violatedDirective + ')')));
+  try {
+    const base = new URL('.', location.href).href;
+    // Fixed packaged bootstrap only; no executable JavaScript from the model.
+    const bootstrap = 'self.PSY_BASE=' + JSON.stringify(base) + ';importScripts(' + JSON.stringify(new URL('src/python-worker.js', base).href) + ');';
+    url = URL.createObjectURL(new Blob([bootstrap], {
+      type: 'text/javascript'
+    }));
+    worker = new Worker(url);
+    worker.onmessage = e => {
+      if (finished) return;
+      port.postMessage(e.data);
+      if (e.data.type !== 'python-progress' && e.data.type !== 'python-output') cleanup();
+    };
+    worker.onerror = e => fail(new Error(e.message || 'Worker не смог загрузить локальные файлы'));
+    worker.onmessageerror = () => fail(new Error('не удалось прочитать сообщение Worker'));
+    worker.postMessage({
+      code: event.data.code,
+      data: event.data.data,
+      files: event.data.files || []
+    });
+  } catch (error) {
+    fail(error);
+  }
 });
+parent.postMessage({
+  type: 'python-ready',
+  nonce
+}, '*');
