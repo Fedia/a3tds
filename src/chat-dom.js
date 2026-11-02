@@ -170,6 +170,20 @@ export function deepseekDOM(action, config, payload) {
       userCount: users.length
     };
   }
+  if (action === 'reveal-latest') {
+    // This scroll container exists in the supplied DOM. No service APIs or tokens.
+    const list = document.querySelector('.ds-virtual-list,[role="log"]');
+    if (!list) return {
+      revealed: false
+    };
+    list.scrollTop = list.scrollHeight;
+    list.dispatchEvent(new Event('scroll', {
+      bubbles: true
+    }));
+    return {
+      revealed: true
+    };
+  }
   if (action === 'clear-task') {
     const input = one('input');
     const current = input?.value ?? input?.innerText;

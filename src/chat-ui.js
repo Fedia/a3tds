@@ -21,6 +21,7 @@
     ownerTabId = null,
     currentState = null,
     finals = [],
+    histories = [],
     lastURL = location.href;
   // The executor has a stable root. Moving the toolbar during SPA layout changes must not reload it.
   const engineHost = document.createElement('div');
@@ -84,6 +85,7 @@
   const acceptedFinals = () => finals.filter(item => item.chatURL === location.href);
   const view = () => mountFinalAnswers(() => deepseekDOM('answer-elements', config), {
     getFinals: acceptedFinals,
+    getHistory: () => histories.filter(item => item.chatURL === location.href).flatMap(item => item.entries),
     color: nativeColor
   });
   let unmountView = () => {};
@@ -162,10 +164,11 @@
   window.addEventListener('resize', place);
   window.visualViewport?.addEventListener('resize', place);
   async function load() {
-    const values = await chrome.storage.local.get(['chat-bindings', 'summary', 'ui-finals']);
+    const values = await chrome.storage.local.get(['chat-bindings', 'summary', 'ui-finals', 'ui-history']);
     config = values['chat-bindings'] || {};
     currentState = values.summary || null;
     finals = values['ui-finals'] || [];
+    histories = values['ui-history'] || [];
   }
   async function ensureExecutor() {
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -191,10 +194,11 @@
     if (area !== 'local') return;
     if (changes['chat-bindings']) config = changes['chat-bindings'].newValue || {};
     if (changes.summary) currentState = changes.summary.newValue || null;
+    if (changes['ui-history']) histories = changes['ui-history'].newValue || [];
     if (changes['ui-finals']) finals = changes['ui-finals'].newValue || [];
     if (changes.summary) transient = '';
     paint();
-    if (changes['ui-finals']) unmountView.refresh?.();
+    if (changes['ui-finals'] || changes['ui-history'] || changes.summary) unmountView.refresh?.();
   });
   settings.onclick = () => send({
     type: 'open-workspace'

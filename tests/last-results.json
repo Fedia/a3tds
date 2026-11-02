@@ -1,8 +1,8 @@
 {
   "date": "2026-11-02",
-  "version": "0.4.0",
+  "version": "0.4.2",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 28,
+  "passed": 30,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -10,6 +10,10 @@
   "results": [
     {
       "name": "UI: состояние контроллера, отсутствие ложного финала и дублирующих инструкций",
+      "ok": true
+    },
+    {
+      "name": "UI: история подтверждённых результатов, текущий шаг и остановка без ложного успеха",
       "ok": true
     },
     {
@@ -94,6 +98,10 @@
     },
     {
       "name": "DeepSeek: восстановление отправленного ответа без повторного клика",
+      "ok": true
+    },
+    {
+      "name": "DeepSeek: общий таймаут, видимые фазы, прокрутка виртуального ответа без повторной отправки",
       "ok": true
     },
     {

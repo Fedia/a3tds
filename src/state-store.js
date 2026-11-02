@@ -46,11 +46,21 @@ export class StateStore {
       const values = {
         summary
       };
+      const historySignature = JSON.stringify([s.id, s.modelChatURL, summary.history]);
+      if (summary.history.length && historySignature !== this.historySignature) {
+        const previous = (await chrome.storage.local.get('ui-history'))['ui-history'] || [];
+        values['ui-history'] = [...previous.filter(item => item.taskId !== s.id), {
+          taskId: s.id,
+          chatURL: s.modelChatURL,
+          entries: summary.history
+        }].slice(-50);
+      }
       if (final) {
         const previous = (await chrome.storage.local.get('ui-finals'))['ui-finals'] || [];
         values['ui-finals'] = [...previous.filter(item => item.taskId !== s.id), final].slice(-50);
       }
       await chrome.storage.local.set(values);
+      this.historySignature = historySignature;
     }
   }
   static fresh(task) {

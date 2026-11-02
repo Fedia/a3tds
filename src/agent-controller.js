@@ -38,6 +38,21 @@ export class AgentController {
       python,
       update
     });
+    this.model.onStatus = async (status, detail = {}) => {
+      if (!this.running || this.s?.status !== 'running') return;
+      const phase = {
+        sending: 'sending',
+        'waiting-response': 'waiting',
+        generating: 'generating',
+        'reading-response': 'checking',
+        completed: 'checking'
+      } [status];
+      const elapsed = Math.floor((detail.elapsed || 0) / 5) * 5;
+      if (!phase || this.s.phase === phase && this.s.waitElapsed === elapsed) return;
+      this.s.phase = phase;
+      this.s.waitElapsed = elapsed;
+      await this.save();
+    };
     this.running = false;
     this.epoch = 0;
     this.captures = () => {
@@ -100,7 +115,13 @@ readiness.ready=false означает, что страница могла не 
       if (this.s.outbound) {
         this.s.phase = 'checking';
         await this.save();
-        this.s.received = await this.model.recoverExchange(this.s.outbound, async outbound => {
+        this.s.received = await this.model.recoverExchange({
+          ...this.s.outbound,
+          before: {
+            ...this.s.outbound.before,
+            deadline: Date.now() + (this.model.waitMs || 180000)
+          }
+        }, async outbound => {
           this.s.outbound = outbound;
           await this.save();
         });
@@ -128,7 +149,7 @@ readiness.ready=false означает, что страница могла не 
           try {
             raw = await this.model.exchange(prompt, journal);
           } catch (e) {
-            if (epoch !== this.epoch || this.s.status !== 'running' || !this.s.outbound || !this.model.recoverExchange) throw e;
+            if (epoch !== this.epoch || this.s.status !== 'running' || !this.s.outbound || !this.model.recoverExchange || ['RESPONSE_TIMEOUT', 'RESPONSE_IDLE'].includes(e.code)) throw e;
             this.s.phase = 'checking';
             await this.save();
             raw = await this.model.recoverExchange(this.s.outbound, journal);
@@ -173,6 +194,7 @@ readiness.ready=false означает, что страница могла не 
           command: c,
           started: Date.now()
         };
+        this.s.waitElapsed = 0;
         this.s.phase = 'executing';
         this.s.current = c.description;
         await this.save();

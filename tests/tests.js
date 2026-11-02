@@ -63,7 +63,7 @@ test('UI: состояние контроллера, отсутствие лож
   assert(stateLabel(paused) === 'Пауза' && progressText(paused) === 'Пауза. Не удалось прочитать ответ DeepSeek.', 'Пауза имеет один короткий текст');
   s.status = 'running';
   s.phase = 'waiting';
-  assert(stateLabel(projectTask(s)) === 'Проверяет ответ', 'Ожидание не выдаётся за выполнение инструмента');
+  assert(stateLabel(projectTask(s)) === 'Ждёт DeepSeek', 'Ожидание не выдаётся за выполнение инструмента');
   s.last = {
     id: 'done',
     status: 'ok'
@@ -77,6 +77,17 @@ test('UI: состояние контроллера, отсутствие лож
   s.status = 'completed';
   assert(projectTask(s).final.text === 'Ответ' && !progressText(projectTask(s)), 'Готовый ответ не сопровождается старой строкой работы');
   assert(!belongsToChat(projectTask(s), 'https://chat.deepseek.com/a/chat/b', 1), 'Состояние не попадает в другой чат');
+});
+test('UI: история подтверждённых результатов, текущий шаг и остановка без ложного успеха', async()=>{
+  const s=StateStore.fresh('history');s.status='running';
+  s.commands.collect={command:command('collect','browser.collect',{tabId:1}),result:{status:'ok',data:{savedRecords:100}}};
+  s.pending={command:command('python','python.run',{code:'secret_code',data:{secret:'data'}})};
+  let view=projectTask(s);
+  assert(view.history.length===2 && view.history[0].status==='ok' && view.history[0].detail.includes('100'),'Подтверждённый сбор отображает число записей');
+  assert(view.history[1].status==='running' && !JSON.stringify(view.history).includes('secret_code'),'В истории нет кода и полных аргументов');
+  s.status='stopped';view=projectTask(s);assert(view.history[1].status==='interrupted' && view.history[0].status==='ok','Остановка не выдаётся за успешное вычисление и не стирает историю');
+  s.status='running';s.phase='generating';s.waitElapsed=25;
+  assert(progressText(projectTask(s)).includes('25 с') && stateLabel(projectTask(s))==='DeepSeek отвечает','Генерация и длительность видны');
 });
 test('JSON: корректная команда, запрет лишних полей и инструментов', async () => {
   parseCommand(JSON.stringify(command('a', 'browser.open', {
@@ -610,6 +621,25 @@ const reviewPlan = () => ({ container: '.review', limit: 500, fields: {
   author: {selector:'.author',attribute:'text'}, date:{selector:'time',attribute:'datetime'},
   rating:{selector:'.rating',attribute:'data-rating'}, text:{selector:'.body',attribute:'text'}, source:{selector:'.source',attribute:'href'}
 }});
+test('DeepSeek: общий таймаут, видимые фазы, прокрутка виртуального ответа без повторной отправки', async()=>{
+  const adapter=new DeepSeekAdapter(store);adapter.waitMs=70;adapter.idleMs=20;adapter.nudgeMs=5;adapter.pollMs=2;
+  let nudges=0;const phases=[];adapter.onStatus=async phase=>phases.push(phase);
+  adapter.inspect=async()=>({status:'ready',answer:'old',count:1,completion:true});
+  adapter.dom=async action=>{assert(action==='reveal-latest','Нельзя повторять отправку');nudges++;};
+  let code;try{await adapter.waitAnswer({answer:'old',count:1})}catch(e){code=e.code}
+  assert(code==='RESPONSE_IDLE' && nudges>0 && phases.includes('waiting-response'),'Пустое ожидание ограничено, виртуальный список раскрыт');
+  adapter.inspect=async()=>({status:'generating',answer:'partial',count:2});
+  try{await adapter.waitAnswer({answer:'old',count:1,deadline:Date.now()+10})}catch(e){code=e.code}
+  assert(code==='RESPONSE_TIMEOUT' && phases.includes('generating'),'Генерация имеет общий конечный бюджет');
+  let recovered=0;
+  const cc=new AgentController({store,files,browser:{detach:async()=>{}},python:{cancel(){}},model:{
+    async exchange(prompt,journal){await journal({phase:'send-uncertain',prompt,before:{}});const e=new Error('Время ответа истекло');e.code='RESPONSE_TIMEOUT';throw e;},
+    async recoverExchange(){recovered++;throw new Error('Недопустимый второй таймаут');}
+  }});
+  await cc.create('timeout');await cc.start();
+  assert(cc.s.status==='paused' && recovered===0 && cc.s.outbound,'Таймаут не запускает второй цикл ожидания, запрос остаётся сохранён');
+});
+
 test('Планы и входные файлы: валидация, запрет JS, значений форм и выхода из папки', async () => {
   parseCommand(JSON.stringify(command('plan','browser.collect',{tabId:1,inspection:'i',plan:reviewPlan()})));
   for (const plan of [{...reviewPlan(),js:'fetch(document.cookie)'}, {...reviewPlan(),limit:501},

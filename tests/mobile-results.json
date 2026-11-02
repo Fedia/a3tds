@@ -1,6 +1,6 @@
 {
   "date": "2026-11-02",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "viewport": {
     "width": 390,
     "height": 844
@@ -33,6 +33,9 @@
     "final summary appears only after controller acceptance",
     "conditional folder and site access controls",
     "automatic scripting fallback respects manual interruption",
-    "controls always above composer; real settings tap hits toolbar despite hidden duplicate headers and recreated composer"
+    "controls always above composer; real settings tap hits toolbar despite hidden duplicate headers and recreated composer",
+    "controller-confirmed tool history visible after actual Python completion",
+    "history view updates running to ok/error without mutating raw reply",
+    "unaccepted reply geometry preserved for virtualizer completion controls"
   ]
 }
