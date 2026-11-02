@@ -1,3 +1,5 @@
+import { Captures } from '../src/captures.js';
+import { loadPythonInputs } from '../src/python-inputs.js';
 import {
   parseCommand
 } from '../src/protocol.js';
@@ -396,9 +398,9 @@ test('Сквозной цикл с тестовой моделью: корпус
   assert(c.s.status === 'completed', c.s.reason);
   assert(c.s.corpus.length === 1, 'Без повторного добавления');
   for (const f of ['corpus.jsonl', 'coding.csv', 'report.md', 'prompts.json', 'task-state.json'])
-    assert(c.s.files.includes(f), 'Нет ' + f);
+    assert(c.s.files.some(path=>path.endsWith('/'+f)), 'Нет ' + f);
   assert(c.s.analysis.frequencies['Поддержка'] === 1, 'Частоты');
-  assert((await files.read('coding.csv')).text.includes('schemaVersion'), 'Версия схемы');
+  assert((await files.read(c.s.files.find(path=>path.endsWith('/coding.csv')))).text.includes('schemaVersion'), 'Версия схемы');
   assert(c.s.logs.some(x => x.event === 'duplicate-skipped'), 'Повтор команды пропущен');
   const saved = await store.get('task');
   assert(saved.corpus[0].hash === c.s.corpus[0].hash, 'Корпус устойчив');
@@ -539,6 +541,113 @@ test('DeepSeek: восстановление отправленного отве
     assert(action==='submit','Повторная вставка в уже заполненное поле запрещена');sends++;return {attempted:true};};
   await adapter.recoverExchange({phase:'inserted',prompt:'prompt',before:{}},async event=>phases.push(event.phase));
   assert(sends===1 && phases.join(',')==='inserted,send-uncertain','Доказанно не отправленный черновик отправляется один раз');
+});
+
+const reviewPlan = () => ({ container: '.review', limit: 500, fields: {
+  author: {selector:'.author',attribute:'text'}, date:{selector:'time',attribute:'datetime'},
+  rating:{selector:'.rating',attribute:'data-rating'}, text:{selector:'.body',attribute:'text'}, source:{selector:'.source',attribute:'href'}
+}});
+test('Планы и входные файлы: валидация, запрет JS, значений форм и выхода из папки', async () => {
+  parseCommand(JSON.stringify(command('plan','browser.collect',{tabId:1,inspection:'i',plan:reviewPlan()})));
+  for (const plan of [{...reviewPlan(),js:'fetch(document.cookie)'}, {...reviewPlan(),limit:501},
+    {...reviewPlan(),fields:{secret:{selector:'input',attribute:'value'}}}]) {
+    await fail(()=>parseCommand(JSON.stringify(command('bad','browser.collect',{tabId:1,inspection:'i',plan}))));
+  }
+  await fail(()=>parseCommand(JSON.stringify(command('bad','python.run',{code:'pass',data:{},files:[{path:'../secret',name:'a'}]}))));
+  parseCommand(JSON.stringify(command('old','python.run',{code:'result=1',data:{}})));
+  parseCommand(JSON.stringify(command('new','python.run',{code:'result=1',data:{},files:[{path:'data.csv',name:'data.csv'}]})));
+});
+test('Страницы → план → сохранённые файлы → остановка/восстановление → настоящий Python/CSV', async () => {
+  const b=new BrowserTools({tabs:[]},async()=>{},async()=>{});
+  const open=b.open.bind(b);b.open=(url,options={})=>open(url,{...options,fixture:true});
+  const cc=new AgentController({store,files,browser:b,model:{cancel(){}},python:new PythonRuntime()});
+  await cc.create('Собери отзывы и обработай локальные файлы');
+  const paths=[], tabs=[];
+  try {
+    for (const [index,name] of ['records.html','records-page2.html'].entries()) {
+      const tab=await cc.execute(command('open'+index,'browser.open',{url:chrome.runtime.getURL('fixtures/'+name)}));
+      tabs.push(tab.tabId);
+      assert(tab.page.savedPath,'Открытая страница уже сохранена');
+      const inspect=await cc.execute(command('inspect'+index,'browser.inspect',{tabId:tab.tabId,selector:'#reviews',limit:40}));
+      assert(inspect.nodes.some(n=>n.selectors.some(s=>s.selector==='article.review')),'Селекторы доступны модели');
+      assert(!JSON.stringify(inspect).includes('NOT_FOR_COLLECTION'),'Нет значений форм и скриптов');
+      const rows=await cc.execute(command('collect'+index,'browser.collect',{tabId:tab.tabId,inspection:inspect.inspection,plan:reviewPlan()}));
+      paths.push(rows.savedPath);
+      assert(rows.savedRecords===(index===0?2:1),'Собраны все записи');
+      if(index===1)assert(rows.missing.date===1,'Отсутствующее поле отмечено');
+      assert(!JSON.stringify(rows.records).includes('BODY_SENTINEL_AFTER_PREVIEW'),'В чат передан только предварительный просмотр');
+      const full=JSON.parse(await(await files.file(rows.savedPath)).text());
+      assert(full.capture.contentHash && full.plan && full.url && full.collectedAt,'Происхождение и план сохранены');
+      assert(!JSON.stringify(full.records).includes('NOT_FOR_COLLECTION')&&!JSON.stringify(full.records).includes('HIDDEN_DATA'),'Секретные и скрытые элементы исключены');
+    }
+    await cc.stop();
+    const reloaded=await new StateStore('psy-agent-tests').init();const saved=await reloaded.get('task');
+    assert(saved.status==='stopped'&&paths.every(p=>saved.files.includes(p)),'Остановка и перезагрузка не теряют сбор');
+    cc.s=StateStore.recover(saved);cc.s.status='paused';b.state=cc.s;
+    const output=await cc.execute(command('CON','python.run',{data:{},files:paths.map((path,i)=>({path,name:'page'+i+'.json'})),code:
+      'import json, pandas as pd\ndocs=[json.load(open(inputs[name],encoding="utf-8")) for name in sorted(inputs)]\nrows=[r["fields"] for d in docs for r in d["records"]]\ndf=pd.DataFrame(rows)\ndf["rating"]=pd.to_numeric(df["rating"])\ndf.to_csv("reviews.csv",index=False)\nresult={"rows":len(df),"mean":float(df["rating"].mean()),"full_text": "BODY_SENTINEL_AFTER_PREVIEW" in df.iloc[-1]["text"]}'
+    }));
+    assert(output.result.rows===3&&output.result.mean===4&&output.result.full_text,'Worker обработал полные локальные файлы');
+    assert(output.files[0].path.endsWith('/reviews.csv')&&(await files.read(output.files[0].path)).text.includes('Ирина'),'CSV сохранён в папке');
+    const old=cc.s.id;await cc.create('Новая задача');
+    assert(old!==cc.s.id&&paths.every(p=>p.includes(old)),'Файлы задач разделены');
+    for(const path of paths)assert((await files.file(path)).size>0,'Предыдущие результаты остались в папке');
+  } finally { await b.detach();for(const id of tabs)await chrome.tabs.remove(id); }
+});
+test('Сбой экспорта: журнал сохраняет данные, повторный запуск выгружает файл без дубликатов', async () => {
+  const cc=new AgentController({store,files,browser:{detach:async()=>{}},model:{cancel(){}},python:{cancel(){}}});
+  await cc.create('durable');const capture=new Captures(store,files,cc.s,()=>cc.save());
+  const write=files.write.bind(files);
+  files.write=async()=>{throw new Error('temporary directory failure')};
+  try {await fail(()=>capture.capture(command('saved','browser.collect',{}),{kind:'records',url:'https://example.org',records:[{fields:{text:'KEEP'}}]}));}
+  finally {files.write=write;}
+  const reopened=await new StateStore('psy-agent-tests').init();
+  const replay=new Captures(reopened,files,cc.s,()=>cc.save());let exports=0;
+  files.write=async(...args)=>{exports++;return write(...args)};
+  try {await Promise.all([replay.flush(),replay.flush()]);}finally{files.write=write;}
+  assert(exports===1,'Одновременные flush записывают страницу один раз');
+  const path=cc.s.files.find(p=>p.endsWith('/pages/step-saved.json'));
+  assert(path&&(await files.read(path)).text.includes('KEEP'),'После сбоя данные выгружены из журнала');
+  const key='capture:'+cc.s.id+':saved';const record=await reopened.get(key);record.status='staged';delete record.savedPath;await reopened.put(key,record);
+  files.write=async()=>{throw new Error('Нельзя повторять уже завершённую запись')};
+  try {await replay.flush();} finally {files.write=write;}
+  assert(cc.s.files.filter(p=>p===path).length===1,'Сверка по хешу не создаёт копию');
+  const collision='tasks/'+cc.s.id+'/pages/step-collision.json';await files.write(collision,'user original');
+  const out=await replay.capture(command('collision','browser.collect',{}),{text:'new'});
+  assert(out.savedPath!==collision&&(await files.read(collision)).text==='user original','Пользовательский файл не перезаписан');
+  const portable=await replay.capture(command('CON','browser.collect',{}),{text:'portable'});
+  assert(pathParts(portable.savedPath).length>0,'Идентификатор команды не создаёт зарезервированное имя Windows');
+});
+test('Отложенная выгрузка прошлой задачи завершается при запуске новой', async () => {
+  const cc=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:{}});await cc.create('old export');
+  const old=cc.s,write=files.write.bind(files);files.write=async()=>{throw new Error('directory unavailable')};
+  try{await fail(()=>cc.captures().capture(command('queued','browser.collect',{}),{text:'OLD_COLLECTED'}));}finally{files.write=write;}
+  await store.put('archive-'+old.id,old);await cc.create('new export');await cc.captures().flush();
+  const archived=await store.get('archive-'+old.id);
+  const path=archived.files.find(p=>p.endsWith('/step-queued.json'));
+  assert(path&&(await files.read(path)).text.includes('OLD_COLLECTED'),'Старая страница выгружена без возврата в настройки и старую задачу');
+  assert(!cc.s.files.includes(path),'Файлы задач не смешиваются');
+});
+test('Остановка во время сохранения: уже полученная страница остаётся в папке', async () => {
+  const cc=new AgentController({store,files,browser:{detach:async()=>{},execute:async()=>({url:'https://example.org',data:'COLLECTED'})},model:{cancel(){}},python:{cancel(){}}});
+  await cc.create('stop capture');cc.running=true;
+  const original=files.write.bind(files);let reached,release;
+  const started=new Promise(r=>reached=r),gate=new Promise(r=>release=r);
+  files.write=async(...args)=>{if(args[0].includes('/pages/')){reached();await gate;}return original(...args)};
+  const collection=cc.execute(command('during-stop','browser.extract',{tabId:1,kind:'text'}));
+  try {await started;await cc.stop();release();const out=await collection;
+    assert(cc.s.status==='stopped'&&(await files.read(out.savedPath)).text.includes('COLLECTED'),'Начатая запись завершена после stop');}
+  finally {release();files.write=original;cc.running=false;}
+});
+test('Python inputs: список папки даёт доступ к файлам, сторонние пути и размеры ограничены', async () => {
+  const out=await files.write('user-data.csv','x\n1\n');
+  const cc=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:{}});await cc.create('Обработай файлы проекта');
+  await fail(()=>loadPythonInputs(files,cc.s,[{path:out.path,name:'data.csv'}]));
+  await cc.execute(command('list-inputs','files.list',{}));
+  const input=await loadPythonInputs(files,cc.s,[{path:out.path,name:'data.csv'}]);
+  assert(new TextDecoder().decode(input[0].bytes).includes('1'),'Вход загружен локально');
+  await fail(()=>loadPythonInputs(files,cc.s,[{path:'../bad',name:'data.csv'}]));
+  await fail(()=>loadPythonInputs({file:async()=>({size:10000001})},cc.s,[{path:out.path,name:'data.csv'}]));
 });
 
 export async function runTests() {

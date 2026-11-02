@@ -71,6 +71,18 @@ async def main():
    state=await host.evaluate('tools.waitForPage(1,{timeoutMs:5000,minWaitMs:100,quietMs:300,intervalMs:100})')
    assert state['ready'] and state['domReady'] and state['waitedMs']>=700,state
    assert await target.locator('p').text_content()=='Parser completed content'
+   await target.goto(BASE+'fixtures/records.html',wait_until='domcontentloaded')
+   rows=await host.evaluate("""async()=>{
+     const inspection=await tools.execute('browser.inspect',{tabId:1,selector:'#reviews',limit:40});
+     window.plan={container:'.review',fields:{author:{selector:'.author',attribute:'text'},date:{selector:'time',attribute:'datetime'},text:{selector:'.body',attribute:'text'}},limit:500};
+     window.inspectToken=inspection.inspection;
+     return tools.execute('browser.collect',{tabId:1,inspection:inspectToken,plan});
+   }""")
+   assert len(rows['records'])==2 and rows['records'][0]['fields']['date']=='2026-11-01'
+   assert 'HIDDEN_DATA' not in str(rows) and 'NOT_FOR_COLLECTION' not in str(rows)
+   await target.goto(BASE+'fixtures/records-page2.html',wait_until='domcontentloaded')
+   assert await host.evaluate("""async()=>{try{await tools.execute('browser.collect',{tabId:1,inspection:inspectToken,plan});return false}catch{return true}}""")
+   print('PASS:',transport,'structured DOM plan, visible fields only, stale inspection after navigation rejected')
    await host.evaluate('tools.detach()');await target.close()
    print('PASS:',transport,'DOMContentLoaded, delayed content/layout, clock exclusion, busy timeout, cancellation')
   await b.close()

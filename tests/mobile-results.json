@@ -1,6 +1,6 @@
 {
-  "date": "2026-11-01",
-  "version": "0.2.6",
+  "date": "2026-11-02",
+  "version": "0.3.0",
   "viewport": {
     "width": 390,
     "height": 844
@@ -24,6 +24,7 @@
     "new task archives old pending/outbound without replay",
     "final summary visible in chat",
     "continue in chat resumes the same stopped task without settings",
-    "old Python operation sealed without rerun"
+    "old Python operation sealed without rerun",
+    "nested per-task output paths and download verified"
   ]
 }

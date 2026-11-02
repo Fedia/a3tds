@@ -1,3 +1,6 @@
+import {
+  validateExtractionPlan
+} from './dom-collector.js';
 /**
  * @typedef {Object} AgentCommand
  * @property {string} id Durable unique id; a completed id is never executed again.
@@ -29,6 +32,16 @@ export const TOOLS = {
   'browser.extract': {
     tabId: integer(1, 1e9),
     kind: v => ['text', 'links', 'tables'].includes(v)
+  },
+  'browser.inspect': {
+    tabId: integer(1, 1e9),
+    selector: s(500),
+    limit: integer(1, 100)
+  },
+  'browser.collect': {
+    tabId: integer(1, 1e9),
+    inspection: s(100),
+    plan: obj
   },
   'browser.click': {
     tabId: integer(1, 1e9),
@@ -76,6 +89,14 @@ export const TOOLS = {
     summary: s(10000)
   }
 };
+const OPTIONAL = {
+  'python.run': {
+    files: Array.isArray
+  },
+  'files.list': {
+    path: v => typeof v === 'string' && v.length < 240
+  }
+};
 export function parseCommand(text) {
   assert(typeof text === 'string' && text.length <= 250000, 'Ответ слишком велик');
   const clean = text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
@@ -88,9 +109,24 @@ export function parseCommand(text) {
   assert(s(400)(c.description) && Object.hasOwn(TOOLS, c.tool) && obj(c.args),
     'Неизвестный инструмент или описание');
   const shape = TOOLS[c.tool];
-  assert(Object.keys(c.args).sort().join(',') === Object.keys(shape).sort().join(','), 'Неверные поля args');
+  const optional = OPTIONAL[c.tool] || {};
+  assert(Object.keys(c.args).every(k => Object.hasOwn(shape, k) || Object.hasOwn(optional, k)), 'Неверные поля args');
   for (const [k, check] of Object.entries(shape)) assert(check(c.args[k]), 'Неверный аргумент ' + k);
+  for (const [k, check] of Object.entries(optional))
+    if (Object.hasOwn(c.args, k)) assert(check(c.args[k]), 'Неверный аргумент ' + k);
   if (c.args.path) pathParts(c.args.path);
+  if (c.tool === 'browser.collect') validateExtractionPlan(c.args.plan);
+  if (c.tool === 'python.run' && c.args.files) {
+    assert(c.args.files.length <= 20, 'Не больше 20 входных файлов');
+    const names = new Set();
+    for (const f of c.args.files) {
+      assert(obj(f) && Object.keys(f).sort().join(',') === 'name,path' && s(240)(f.path) && s(200)(f.name), 'Входной файл: path и name');
+      pathParts(f.path);
+      pathParts(f.name);
+      assert(!names.has(f.name), 'Повтор имени входного файла');
+      names.add(f.name);
+    }
+  }
   if (c.tool === 'browser.open') safeURL(c.args.url);
   if (c.tool === 'analysis.save') {
     assert(s(80)(c.args.schema.version) && Array.isArray(c.args.schema.categories) && c.args.schema.categories
@@ -105,5 +141,5 @@ export function parseCommand(text) {
 }
 export const protocolHelp = () => JSON.stringify(Object.fromEntries(Object.entries(TOOLS).filter(([k]) => !k
   .startsWith('corpus.') && k !== 'analysis.save').map(([k, v]) => [k,
-  Object.keys(v)
+  [...Object.keys(v), ...Object.keys(OPTIONAL[k] || {}).map(name => name + '?')]
 ])));

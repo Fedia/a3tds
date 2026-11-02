@@ -22,9 +22,14 @@ export class StateStore {
     });
   }
   async put(key, value) {
+    return this.putMany([
+      [key, value]
+    ]);
+  }
+  async putMany(entries) {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction('kv', 'readwrite');
-      tx.objectStore('kv').put(value, key);
+      for (const [key, value] of entries) tx.objectStore('kv').put(value, key);
       tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);

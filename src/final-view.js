@@ -32,7 +32,7 @@ export function mountFinalAnswers(getAnswers) {
         let command;
         try { command = JSON.parse(clean); } catch {}
         if (command && typeof command.tool === 'string' &&
-            /^(browser\.(open|snapshot|click|type|scroll|extract)|files\.(list|read|write)|python\.run|task\.finish)$/.test(command.tool) &&
+            /^(browser\.(open|snapshot|inspect|collect|click|type|scroll|extract)|files\.(list|read|write)|python\.run|task\.finish)$/.test(command.tool) &&
             typeof command.description === 'string' && command.description.length <= 400) {
           text = command.description;
           if (complete && command.tool === 'task.finish' && typeof command.args?.summary === 'string' &&

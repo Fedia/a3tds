@@ -1,4 +1,11 @@
-import { samplePageReadiness, waitForStablePage } from './page-readiness.js';
+import {
+  domCollectionOperation,
+  validateExtractionPlan
+} from './dom-collector.js';
+import {
+  samplePageReadiness,
+  waitForStablePage
+} from './page-readiness.js';
 import {
   assert,
   safeURL,
@@ -20,9 +27,9 @@ export function pageOperation(op, args) {
     new MutationObserver(records => {
       const ignored = 'head,script,style,nav,header,footer,aside,time,[role=navigation],[role=banner],[role=complementary],[data-ad],[data-ad-slot],.adsbygoogle';
       if (records.some(record => {
-        const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-        return !target?.closest(ignored);
-      })) state.revision++;
+          const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+          return !target?.closest(ignored);
+        })) state.revision++;
     }).observe(document, {
       subtree: true,
       childList: true,
@@ -134,7 +141,7 @@ export function pageOperation(op, args) {
       label: (e.textContent || e.getAttribute('aria-label') || '').slice(0, 120),
       navigation: e.tagName === 'A' && !!e.href && !e.hasAttribute('download') && !e.getAttribute('onclick') && !e.getAttribute('role'),
       search: e.matches('input[type=search],[role=searchbox]') ||
-        e.tagName === 'INPUT' && /^(q|query|search)$|search|поиск/i.test([e.name,e.placeholder,e.getAttribute('aria-label')].join(' ')) ||
+        e.tagName === 'INPUT' && /^(q|query|search)$|search|поиск/i.test([e.name, e.placeholder, e.getAttribute('aria-label')].join(' ')) ||
         !!e.closest('form[role=search],[role=search]'),
       disclosure: e.hasAttribute('aria-expanded') && !e.closest('form'),
       formMethod: (e.form || e.closest('form'))?.method || null
@@ -155,7 +162,7 @@ export function pageOperation(op, args) {
     else {
       if (!element.matches(
           'textarea,input:not([type]),input[type=text],input[type=search],input[type=email],input[type=url],input[type=tel]'
-          )) throw new Error('Ввод только в текстовые поля');
+        )) throw new Error('Ввод только в текстовые поля');
       element.focus();
       const start = element.selectionStart ?? element.value.length;
       const end = element.selectionEnd ?? start;
@@ -224,7 +231,10 @@ export class BrowserTools {
   async recoverTabs() {
     const valid = [];
     for (const tab of this.state.tabs) {
-      try { await this.check(tab.id); valid.push(tab); } catch {}
+      try {
+        await this.check(tab.id);
+        valid.push(tab);
+      } catch {}
     }
     this.state.tabs = valid;
   }
@@ -247,40 +257,53 @@ export class BrowserTools {
   useScripting() {
     return this.transport === 'scripting' || !chrome.debugger?.attach;
   }
-  reset() { this.generation++; this.interrupted = false; }
-  cancel() { this.generation++; }
+  reset() {
+    this.generation++;
+    this.interrupted = false;
+  }
+  cancel() {
+    this.generation++;
+  }
   async waitForPage(id, options = {}) {
     const generation = this.generation;
     return waitForStablePage(() => this.runOnce(id, 'readiness'), {
-      ...options, cancelled: () => generation !== this.generation || this.interrupted
+      ...options,
+      cancelled: () => generation !== this.generation || this.interrupted
     });
   }
   async run(id, op, args = {}) {
     const generation = this.generation;
-    const reading = ['snapshot', 'extract'].includes(op);
+    const reading = ['snapshot', 'extract', 'inspect', 'collect'].includes(op);
     const readiness = reading ? await this.waitForPage(id) : null;
-    for (let attempt = 0; ; attempt++) {
+    for (let attempt = 0;; attempt++) {
       if (generation !== this.generation) throw new Error('Действие остановлено');
       try {
         const data = await this.runOnce(id, op, args);
-        if (generation !== this.generation) throw new Error('Действие остановлено');
+        if (generation !== this.generation && !reading) throw new Error('Действие остановлено');
         if (reading) {
           if (readiness.url !== data.url || data.documentId && readiness.documentId !== data.documentId) {
-            readiness.ready = false; readiness.reason = 'navigation_changed';
+            readiness.ready = false;
+            readiness.reason = 'navigation_changed';
           }
-          return { ...data, readiness };
+          return {
+            ...data,
+            readiness
+          };
         }
-        if (op === 'scroll') return { ...data, readiness: await this.waitForPage(id) };
+        if (op === 'scroll') return {
+          ...data,
+          readiness: await this.waitForPage(id)
+        };
         return data;
       } catch (e) {
         if (generation !== this.generation || attempt >= 1 ||
-            !['snapshot', 'extract', 'locate'].includes(op) || this.interrupted) throw e;
+          !['snapshot', 'extract', 'inspect', 'collect', 'locate'].includes(op) || this.interrupted) throw e;
         await sleep(200);
       }
     }
   }
   async runOnce(id, op, args = {}) {
-    const operation = op === 'readiness' ? samplePageReadiness : pageOperation;
+    const operation = op === 'readiness' ? samplePageReadiness : ['inspect', 'collect'].includes(op) ? domCollectionOperation : pageOperation;
     if (this.useScripting()) {
       await this.check(id);
       const [result] = await timeout(chrome.scripting.executeScript({
@@ -314,7 +337,8 @@ export class BrowserTools {
     return r.result.value;
   }
   async open(url, {
-    fixture = false, commandId
+    fixture = false,
+    commandId
   } = {}) {
     assert(this.state.tabs.length < 5, 'Лимит пяти рабочих страниц');
     if (!fixture) {
@@ -330,38 +354,62 @@ export class BrowserTools {
     });
     this.state.tabs.push({
       id: tab.id,
-      url, commandId
+      url,
+      commandId
     });
     await this.save();
-    return { tabId: tab.id, url: tab.pendingUrl || tab.url || url };
+    return {
+      tabId: tab.id,
+      url: tab.pendingUrl || tab.url || url
+    };
 
   }
   async execute(tool, a, context = {}) {
     const op = tool.split('.')[1];
+    if (op === 'collect') validateExtractionPlan(a.plan);
     if (op === 'open') {
       const opened = await this.open(a.url, context);
       try {
         const page = await this.run(opened.tabId, 'snapshot');
-        return { ...opened, url: page.url || opened.url, page };
+        return {
+          ...opened,
+          url: page.url || opened.url,
+          page
+        };
       } catch (e) {
         // Navigation succeeded: report failed reading separately, never reopen blindly.
-        return { ...opened, page: null, readError: { code: 'SNAPSHOT_FAILED', message: e.message },
-          next: 'Вкладка открыта, но текст не прочитан. Используй browser.snapshot или browser.extract.' };
+        return {
+          ...opened,
+          page: null,
+          readError: {
+            code: 'SNAPSHOT_FAILED',
+            message: e.message
+          },
+          next: 'Вкладка открыта, но текст не прочитан. Используй browser.snapshot или browser.extract.'
+        };
       }
     }
     if (op === 'click' || op === 'type') {
       if (this.state.blockedInteractions?.includes(a.tabId)) {
         const error = new Error('Исход предыдущего взаимодействия не подтверждён. Эта вкладка доступна для чтения; используй чтение или открой другую.');
-        error.definite = true; throw error;
+        error.definite = true;
+        throw error;
       }
       let info;
-      try { info = await this.run(a.tabId, 'locate', a); }
-      catch (e) { e.definite = true; throw e; }
       try {
-      if (op === 'type') assert(['INPUT', 'TEXTAREA'].includes(info.tag) && (!info.type || ['text',
-        'search', 'email', 'url', 'tel'
-      ].includes(info.type)), 'Ввод разрешён только в текстовые поля');
-      } catch (e) { e.definite = true; throw e; }
+        info = await this.run(a.tabId, 'locate', a);
+      } catch (e) {
+        e.definite = true;
+        throw e;
+      }
+      try {
+        if (op === 'type') assert(['INPUT', 'TEXTAREA'].includes(info.tag) && (!info.type || ['text',
+          'search', 'email', 'url', 'tel'
+        ].includes(info.type)), 'Ввод разрешён только в текстовые поля');
+      } catch (e) {
+        e.definite = true;
+        throw e;
+      }
       // Read-only navigation/search controls run without approval dialogs.
       // Arbitrary site mutations are unavailable, rather than delegated to untrusted page text.
       const fixture = (await this.check(a.tabId)).url.startsWith(chrome.runtime.getURL('fixtures/'));
@@ -375,10 +423,19 @@ export class BrowserTools {
       try {
         if (info.href && !fixture) safeURL(info.href);
         info = await this.run(a.tabId, 'locate', a);
-      } catch (e) { e.definite = true; throw e; }
+      } catch (e) {
+        e.definite = true;
+        throw e;
+      }
       if (this.useScripting()) {
-        const result = await this.run(a.tabId, 'interact', { ...a, action: op });
-        return { ...result, readiness: await this.waitForPage(a.tabId) };
+        const result = await this.run(a.tabId, 'interact', {
+          ...a,
+          action: op
+        });
+        return {
+          ...result,
+          readiness: await this.waitForPage(a.tabId)
+        };
       }
       await this.send(a.tabId, 'Input.dispatchMouseEvent', {
         type: 'mousePressed',

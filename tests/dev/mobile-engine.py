@@ -90,7 +90,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    await asyncio.sleep(.3)
   summary=shared.get('summary',{});print('SUMMARY',summary,flush=True)
   assert summary.get('status')=='completed',await chat.evaluate('window.lastAlert')
-  assert 'python-result-py.json' in summary['files']
+  result_path=next(path for path in summary['files'] if path.endswith('/python-result-py.json'))
   assert await frame.evaluate("""async()=>{
     const {StateStore}=await import('./src/state-store.js'); const store=await new StateStore().init();
     const old=await store.get('archive-'+oldTaskId); const current=await store.get('task');
@@ -100,7 +100,11 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await chat.wait_for_selector('.psy-agent-final')
   assert await chat.locator('.psy-agent-final').inner_text() == 'Ответ агента\nСумма равна 6'
   frame=next(f for f in chat.frames if f.url==EXT+'executor.html')
-  result=await frame.evaluate('''async()=>{const d=await(await navigator.storage.getDirectory()).getDirectoryHandle('agent-results');return JSON.parse(await(await(await d.getFileHandle('python-result-py.json')).getFile()).text())}''')
+  result=await frame.evaluate("""async path=>{
+    let d=await(await navigator.storage.getDirectory()).getDirectoryHandle('agent-results');
+    const parts=path.split('/'); for(const part of parts.slice(0,-1))d=await d.getDirectoryHandle(part);
+    return JSON.parse(await(await(await d.getFileHandle(parts.at(-1))).getFile()).text());
+  }""",result_path)
   assert result['result']['sum']==6
   settings=await context.new_page();pages[2]=settings;await settings.goto(EXT+'workspace.html')
   await settings.locator('#diagnose').click();await settings.wait_for_selector('#files button')

@@ -36,6 +36,7 @@ window.addEventListener('message', e => {
   port.start();
   worker.postMessage({
     code: e.data.code,
-    data: e.data.data
+    data: e.data.data,
+    files: e.data.files || []
   });
 });

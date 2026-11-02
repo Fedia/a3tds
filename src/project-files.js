@@ -32,7 +32,7 @@ export class ProjectFiles {
   async choose() {
     assert(typeof showDirectoryPicker === 'function',
       'Этот браузер не поддерживает выбор папки (File System Access API). Требуется другой способ сохранения файлов.'
-      );
+    );
     const candidate = await showDirectoryPicker({
       mode: 'readwrite',
       id: 'psy-agent-project'
@@ -80,13 +80,17 @@ export class ProjectFiles {
     });
     return [d, p.at(-1)];
   }
-  async list() {
+  async list(path = '') {
     await this.permission();
+    let directory = this.root;
+    if (path)
+      for (const part of pathParts(path)) directory = await directory.getDirectoryHandle(part);
     const out = [];
-    for await (const [name, h] of this.root.entries()) {
+    for await (const [name, h] of directory.entries()) {
       out.push({
         name,
-        kind: h.kind
+        kind: h.kind,
+        path: path ? path + '/' + name : name
       });
       if (out.length >= 300) break;
     }
@@ -110,7 +114,8 @@ export class ProjectFiles {
   }
   /** Never overwrite an unowned or externally modified file. Ownership is content-hash based. */
   async write(path, text, {
-    owned = false, operationId
+    owned = false,
+    operationId
   } = {}) {
     assert((typeof text === 'string' || text instanceof Uint8Array) && text.length <= 10000000,
       'Слишком большой файл');
@@ -132,7 +137,10 @@ export class ProjectFiles {
       create: true
     });
     const actual = [...pathParts(path).slice(0, -1), name].join('/');
-    if (operationId) await this.store.put('write:' + operationId, { path: actual, hash: await hash(text) });
+    if (operationId) await this.store.put('write:' + operationId, {
+      path: actual,
+      hash: await hash(text)
+    });
     const stream = await h.createWritable();
     try {
       await stream.write(text);
