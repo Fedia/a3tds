@@ -71,7 +71,6 @@ export class DeepSeekAdapter {
   }
   async exchange(prompt, journal) {
     this.abort = false;
-    assert(prompt.length <= 45000, 'Бюджет одного сообщения: 45000 символов');
     const before = {
       ...await this.inspect(),
       deadline: Date.now() + this.waitMs
@@ -126,6 +125,8 @@ export class DeepSeekAdapter {
     assert(!this.abort, 'Отправка отменена');
     const ready = await this.inspect();
     assert(ready.status === 'ready' && ready.sendEnabled !== false, 'Чат пока не разрешил отправку. Запрос сохранён и ещё не отправлен.');
+    const delivery = await this.dom('delivery', prompt);
+    assert(delivery.draft === 'exact', 'Поле DeepSeek изменило текст запроса. Полный запрос сохранён и не отправлен.');
     // Only this durable phase means a click may have happened.
     await journal({
       phase: 'send-uncertain',

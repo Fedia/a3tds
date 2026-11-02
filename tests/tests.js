@@ -373,6 +373,7 @@ test('DOM-адаптер: вставка, отправка, генерация, 
       sends++;
       throw new Error('uncertain');
     }
+    if (action === 'delivery') return { draft: 'exact' };
     return {
       inserted: true
     };
@@ -638,6 +639,41 @@ test('DeepSeek: общий таймаут, видимые фазы, прокру
   }});
   await cc.create('timeout');await cc.start();
   assert(cc.s.status==='paused' && recovered===0 && cc.s.outbound,'Таймаут не запускает второй цикл ожидания, запрос остаётся сохранён');
+});
+
+test('Длительная задача: продолжение после прежнего лимита, более 50 новых шагов, компактный контекст', async()=>{
+  let calls=0,runs=0;
+  const fakeFiles={permission:async()=>{},write:async path=>({path})};
+  const cc=new AgentController({store,files:fakeFiles,browser:{detach:async()=>{},execute:async()=>{runs++;return {scrolled:true}}},python:{cancel(){}},model:{
+    async exchange(prompt){
+      assert(!prompt.includes('"remaining"')&&!prompt.includes('50 шагов'),'Старый бюджет отсутствует в инструкции');
+      calls++;return JSON.stringify(calls<=55?command('long-'+calls,'browser.scroll',{tabId:1,delta:calls}):command('long-done','task.finish',{summary:'Готово'}));
+    }
+  }});
+  await cc.create('Продолжи длительный сбор');
+  cc.s.steps=50;cc.s.started=Date.now()-2*24*60*60000;cc.s.reason='Достигнут лимит 50 шагов';
+  cc.s.files=['old-result.csv'];
+  await cc.start();
+  assert(cc.s.status==='completed'&&runs===55&&cc.s.steps===106&&cc.s.files.includes('old-result.csv'),'Старая задача продолжена без сброса и потери файлов');
+  cc.s.files=Array.from({length:2000},(_,i)=>'tasks/'+cc.s.id+'/pages/page-'+i+'.json');
+  const prompt=cc.prompt(),context=JSON.parse(prompt.split('Состояние: ')[1]);
+  assert(prompt.length<45000&&context.files.length===20&&context.totalFiles===2000&&context.filesTruncated,'История файлов не раздувает каждый запрос, усечение явно обозначено');
+  calls=0;runs=0;
+  cc.model.exchange=async()=>{calls++;return JSON.stringify(command('duplicate-loop','browser.scroll',{tabId:1,delta:42}))};
+  await cc.create('Проверка повторяющейся команды');await cc.start();
+  assert(cc.s.status==='paused'&&runs===1&&calls===4&&cc.s.reason.includes('Повторяющиеся'),'Повтор выполненного id не создаёт бесконечный цикл и не выполняется заново');
+});
+test('DeepSeek: большое сообщение не отклоняется искусственным порогом расширения', async()=>{
+  const adapter=new DeepSeekAdapter(store);let inserted='';
+  adapter.inspect=async()=>({status:'ready',count:0,answer:''});
+  adapter.dom=async(action,prompt)=>{assert(action==='send','Ожидалась только вставка');inserted=prompt;};
+  adapter.submitPrepared=async()=>{};adapter.waitAnswer=async()=> 'ok';
+  assert(await adapter.exchange('x'.repeat(46000),async()=>{})==='ok'&&inserted.length===46000,'Порог 45000 удалён; ограничения самого сервиса определяет его интерфейс');
+  const checked=new DeepSeekAdapter(store);let sends=0;
+  checked.inspect=async()=>({status:'ready',sendEnabled:true});
+  checked.dom=async action=>{if(action==='submit')sends++;return {draft:'other'}};
+  await fail(()=>checked.submitPrepared('full prompt',{},async()=>{}));
+  assert(sends===0,'Изменённый самим сайтом текст нельзя молча отправить вместо полного запроса');
 });
 
 test('Планы и входные файлы: валидация, запрет JS, значений форм и выхода из папки', async () => {

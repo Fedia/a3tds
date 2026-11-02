@@ -18,7 +18,6 @@ export function shortReason(reason = '') {
   if (/требуется вход|войдите|login/i.test(reason)) return 'Войдите в DeepSeek.';
   if (/папк|хранилищ|разрешени/i.test(reason)) return 'Нужен доступ к хранилищу результатов.';
   if (/DeepSeek|отправк|ответ|чат/i.test(reason)) return 'Не удалось прочитать ответ DeepSeek.';
-  if (/лимит|бюджет/i.test(reason)) return 'Достигнут лимит задачи.';
   return reason.replace(/Агент приостановлен:\s*/gi, '').split(/Можно\s+(?:позже\s+)?написать/i)[0]
     .trim().slice(0, 160) || 'Работа приостановлена.';
 }

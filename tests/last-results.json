@@ -1,8 +1,8 @@
 {
   "date": "2026-11-02",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 30,
+  "passed": 32,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -102,6 +102,14 @@
     },
     {
       "name": "DeepSeek: общий таймаут, видимые фазы, прокрутка виртуального ответа без повторной отправки",
+      "ok": true
+    },
+    {
+      "name": "Длительная задача: продолжение после прежнего лимита, более 50 новых шагов, компактный контекст",
+      "ok": true
+    },
+    {
+      "name": "DeepSeek: большое сообщение не отклоняется искусственным порогом расширения",
       "ok": true
     },
     {
