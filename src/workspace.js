@@ -1,4 +1,4 @@
-/** Settings only. Closing this document does not stop the executor in DeepSeek. */
+/** Compact settings. Execution stays in the chat; diagnostics and binding are secondary. */
 import {
   StateStore
 } from './state-store.js';
@@ -6,131 +6,133 @@ import {
   ProjectFiles
 } from './project-files.js';
 import {
+  deepseekDOM
+} from './chat-dom.js';
+import {
   assert
 } from './util.js';
 const $ = s => document.querySelector(s);
-const store = await new StateStore().init();
-const files = new ProjectFiles(store);
+const store = await new StateStore().init(),
+  files = new ProjectFiles(store);
 await files.restore();
-const preferences = await chrome.storage.local.get(['cloud-consent', 'browser-mode']);
-if (preferences['cloud-consent'] === undefined) {
-  preferences['cloud-consent'] = (await store.get('cloud-consent')) === true;
-  await chrome.storage.local.set({
-    'cloud-consent': preferences['cloud-consent']
-  });
-}
-$('#consent').checked = preferences['cloud-consent'];
-$('#consent').onchange = () => chrome.storage.local.set({
-  'cloud-consent': $('#consent').checked
-});
-$('#compatible').checked = preferences['browser-mode'] === 'scripting' || !chrome.debugger?.attach;
-$('#compatible').onchange = () => chrome.storage.local.set({
-  'browser-mode': $('#compatible').checked ? 'scripting' : 'auto'
-});
-
-function render() {
-  $('#folder-name').textContent = files.mode === 'browser' ? 'Внутреннее хранилище браузера' : files.root
-    ?.name || 'Хранилище не выбрано';
-}
-
-function action(id, fn) {
-  $(id).onclick = async () => {
+let selected = null,
+  stored = null,
+  accessType = null,
+  available = [];
+const notice = text => {
+  $('#status').textContent = text || '';
+  $('#status').hidden = !text;
+};
+const action = (selector, fn) => {
+  $(selector).onclick = async () => {
     try {
+      notice('');
       await fn();
-      render();
+      await render();
     } catch (e) {
-      $('#status').textContent = e.message;
+      if (e.name !== 'AbortError') notice(e.message);
     }
   };
+};
+async function command(name, extra = {}) {
+  assert(selected, 'Откройте DeepSeek');
+  const result = await chrome.runtime.sendMessage({
+    type: 'settings-command',
+    tabId: selected,
+    command: name,
+    ...extra
+  });
+  assert(result?.ok, result?.error || 'Обновите страницу DeepSeek');
+  return result.data;
 }
 async function idle() {
   const {
     summary
   } = await chrome.storage.local.get('summary');
-  if (summary?.status === 'running') {
-    const state = await command('status');
-    assert(!state.active, 'Сначала выключите режим агента в чате');
-  }
+  if (summary?.status === 'running') assert(!(await command('status')).active, 'Сначала остановите агента в чате');
 }
-async function command(command, extra = {}) {
-  const tabId = Number($('#deepseek-tab').value);
-  assert(tabId, 'Откройте DeepSeek и обновите список');
-  const result = await chrome.runtime.sendMessage({
-    type: 'settings-command',
-    tabId,
-    command,
-    ...extra
-  });
-  assert(result?.ok, result?.error || 'Откройте или обновите вкладку DeepSeek');
-  return result.data;
-}
-action('#folder', async () => {
-  await idle();
-  await files.choose();
-});
-action('#internal', async () => {
-  await idle();
-  await files.useBrowserStorage();
-});
-action('#permission', () => files.authorize());
-action('#site-permission', async () => {
-  assert(chrome.permissions?.request, 'Браузер не поддерживает запрос доступа к сайтам');
-  const granted = await chrome.permissions.request({
-    origins: ['http://*/*', 'https://*/*']
-  });
-  assert(granted, 'Доступ к сайтам не предоставлен');
-  $('#status').textContent = 'Доступ к страницам для совместимого режима разрешён';
-});
 async function tabs() {
-  const found = await chrome.tabs.query({
+  available = await chrome.tabs.query({
     url: 'https://chat.deepseek.com/*'
   });
-  $('#deepseek-tab').replaceChildren(...found.map(t => {
-    const o = document.createElement('option');
-    o.value = t.id;
-    o.textContent = t.title || 'DeepSeek';
-    return o;
+  const context = await chrome.storage.session?.get('settings-chat-tab') || {};
+  const {
+    summary
+  } = await chrome.storage.local.get('summary');
+  const desired = context['settings-chat-tab'] || selected || summary?.ownerTabId;
+  selected = available.find(t => t.id === desired)?.id || available.find(t => t.active)?.id || available[0]?.id || null;
+  $('#deepseek-tab').replaceChildren(...available.map(tab => {
+    const option = document.createElement('option');
+    option.value = tab.id;
+    option.textContent = tab.title || 'DeepSeek';
+    return option;
   }));
+  if (selected) $('#deepseek-tab').value = selected;
+  $('#chat-choice').hidden = available.length < 2;
 }
-action('#refresh-tabs', tabs);
-action('#pick', async () => {
-  await idle();
-  const id = Number($('#deepseek-tab').value);
-  assert(id, 'Откройте DeepSeek');
-  await chrome.tabs.update(id, {
-    active: true
-  });
-  const result = await chrome.tabs.sendMessage(id, {
-    type: 'pick-bindings'
-  }, {
-    frameId: 0
-  });
-  assert(result?.ok, result?.error || 'Обновите вкладку DeepSeek');
-});
-action('#reconcile', () => command('reconcile', {
-  note: $('#note').value
-}));
-action('#recover-send', () => command('recover-send'));
-action('#resume', () => command('resume'));
-action('#reset-tabs', () => command('reset-tabs'));
-async function diagnostics() {
-  const data = await command('status');
-  const c = data.capabilities;
-  $('#status').textContent =
-    `Исполнитель в чате доступен. CDP: ${c.debugger?'есть':'нет'}, scripting: ${c.scripting?'есть':'нет'}, session storage: ${c.sessionStorage?'есть':'нет'}, Worker: ${c.worker?'есть':'нет'}, Web Locks: ${c.locks?'есть':'нет'}, внутренние файлы: ${c.internalFiles?'есть':'нет'}.\n${data.status||''} ${data.reason||''}`;
-  $('#files').replaceChildren(...data.files.map(path => {
+async function render() {
+  $('#folder-name').textContent = files.mode === 'browser' ? 'Внутри браузера' : files.root?.name || 'Не выбрано';
+  $('#folder').textContent = files.root ? 'Изменить' : 'Выбрать';
+  $('#choose-folder').disabled = typeof showDirectoryPicker !== 'function';
+  $('#storage-hint').textContent = typeof showDirectoryPicker === 'function' ? '' : 'Выбор папки недоступен в этом браузере.';
+  const preferences = await chrome.storage.local.get(['browser-mode', 'needs-site-access', 'browser-auto-fallback']);
+  const mode = preferences['browser-mode'] || 'auto';
+  $('#mode').value = mode;
+  let directoryAccess = true;
+  try {
+    await files.permission();
+  } catch {
+    directoryAccess = false;
+  }
+  let webAccess = true;
+  if (mode === 'scripting' || !chrome.debugger?.attach || preferences['browser-auto-fallback'] || preferences['needs-site-access']) {
+    try {
+      webAccess = await chrome.permissions.contains({
+        origins: ['http://*/*', 'https://*/*']
+      });
+    } catch {
+      webAccess = false;
+    }
+  }
+  accessType = files.root && !directoryAccess ? 'directory' : !webAccess ? 'web' : null;
+  $('#access-row').hidden = !accessType;
+  $('#access-label').textContent = accessType === 'directory' ? 'Доступ к папке' : 'Доступ к страницам';
+  $('#chat-status').textContent = selected ? 'Чат открыт' : 'Не открыт';
+  if (selected) {
+    try {
+      const bindings = (await chrome.storage.local.get('chat-bindings'))['chat-bindings'] || {};
+      const [result] = await chrome.scripting.executeScript({
+        target: {
+          tabId: selected
+        },
+        func: deepseekDOM,
+        args: ['inspect', bindings, null]
+      });
+      const state = result.result;
+      $('#chat-status').textContent = state.status === 'ready' ? 'Подключён' : state.status === 'generating' ? 'Отвечает' : state.status === 'login-required' ? 'Нужен вход' : 'Проверьте чат';
+    } catch {
+      $('#chat-status').textContent = 'Обновите DeepSeek';
+    }
+  }
+  stored = await store.get('task');
+  const paths = stored?.files || [];
+  $('#file-count').textContent = paths.length ? `Файлы · ${paths.length}` : 'Файлы результатов';
+  $('#files-empty').hidden = paths.length > 0;
+  $('#files').replaceChildren(...paths.map(path => {
     const li = document.createElement('li'),
+      name = document.createElement('span'),
       button = document.createElement('button');
-    button.textContent = 'Скачать ' + path;
+    name.textContent = path.split('/').slice(2).join('/') || path;
+    name.title = path;
+    button.textContent = 'Скачать';
+    button.setAttribute('aria-label', 'Скачать ' + name.textContent);
     button.onclick = async () => {
       try {
-        const file = await command('export-file', {
-          path
-        });
-        const url = URL.createObjectURL(new Blob([new Uint8Array(file.bytes)], {
-          type: 'application/octet-stream'
-        }));
-        const link = document.createElement('a');
+        const current = await store.get('task');
+        assert(current?.files.includes(path), 'Файл больше не относится к текущей задаче');
+        const file = await files.file(path),
+          url = URL.createObjectURL(file),
+          link = document.createElement('a');
         link.href = url;
         link.download = file.name;
         document.body.append(link);
@@ -138,14 +140,83 @@ async function diagnostics() {
         link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 60000);
       } catch (e) {
-        $('#status').textContent = e.message;
+        notice(e.message);
       }
     };
-    li.append(button);
+    li.append(name, button);
     return li;
   }));
 }
-action('#diagnose', diagnostics);
-$('#folder').disabled = typeof showDirectoryPicker !== 'function';
+action('#folder', () => {
+  const panel = $('#storage-options');
+  panel.hidden = !panel.hidden;
+  $('#folder').setAttribute('aria-expanded', String(!panel.hidden));
+});
+action('#choose-folder', async () => {
+  await idle();
+  await files.choose();
+  $('#storage-options').hidden = true;
+  $('#folder').setAttribute('aria-expanded', 'false');
+});
+action('#internal', async () => {
+  await idle();
+  await files.useBrowserStorage();
+  $('#storage-options').hidden = true;
+  $('#folder').setAttribute('aria-expanded', 'false');
+});
+action('#access', async () => {
+  if (accessType === 'directory') await files.authorize();
+  else {
+    assert(await chrome.permissions.request({
+      origins: ['http://*/*', 'https://*/*']
+    }), 'Доступ не предоставлен');
+    await chrome.storage.local.set({
+      'needs-site-access': false
+    });
+  }
+});
+action('#files-toggle', () => {
+  const panel = $('#files-panel');
+  panel.hidden = !panel.hidden;
+  $('#files-toggle').setAttribute('aria-expanded', String(!panel.hidden));
+});
+$('#mode').onchange = async () => {
+  await chrome.storage.local.set({
+    'browser-mode': $('#mode').value
+  });
+  await render();
+};
+$('#deepseek-tab').onchange = async () => {
+  selected = Number($('#deepseek-tab').value);
+  await chrome.storage.session?.set({
+    'settings-chat-tab': selected
+  });
+  await render();
+};
+action('#pick', async () => {
+  await idle();
+  assert(selected, 'Откройте DeepSeek');
+  await chrome.tabs.update(selected, {
+    active: true
+  });
+  const result = await chrome.tabs.sendMessage(selected, {
+    type: 'pick-bindings'
+  }, {
+    frameId: 0
+  });
+  assert(result?.ok, result?.error || 'Обновите DeepSeek');
+});
+action('#diagnose', async () => {
+  const data = await command('status');
+  $('#diagnostics').hidden = false;
+  $('#diagnostics').textContent = Object.entries(data.capabilities).map(([key, value]) => `${key}: ${value?'есть':'нет'}`).join('\n');
+});
+let refreshTimer;
+const refresh = () => {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => tabs().then(render).catch(e => notice(e.message)), 100);
+};
+chrome.storage.onChanged.addListener(refresh);
+window.addEventListener('focus', refresh);
 await tabs();
-render();
+await render();

@@ -1,4 +1,7 @@
-async function openSettings() {
+async function openSettings(source) {
+  if (source?.url?.startsWith('https://chat.deepseek.com/')) await chrome.storage.session.set({
+    'settings-chat-tab': source.id
+  });
   const url = chrome.runtime.getURL('workspace.html');
   const tabs = await chrome.tabs.query({});
   const tab = tabs.find(t => t.url === url);
@@ -21,7 +24,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const chat = sender.frameId === 0 && sender.tab && sender.url?.startsWith('https://chat.deepseek.com/');
   const settings = sender.url === chrome.runtime.getURL('workspace.html');
   if (message.type === 'open-workspace' && (chat || settings)) {
-    openSettings().then(() => reply({
+    openSettings(sender.tab).then(() => reply({
       ok: true
     }), e => reply({
       ok: false,
@@ -38,7 +41,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     targetTabId = sender.tab.id;
     command = message.type;
   } else if (settings && message.type === 'settings-command' && allowedSettings.includes(message
-    .command) && Number.isInteger(message.tabId)) {
+      .command) && Number.isInteger(message.tabId)) {
     targetTabId = message.tabId;
     command = message.command;
   } else return;

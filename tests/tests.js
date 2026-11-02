@@ -1,3 +1,4 @@
+import { stateLabel, progressText, projectTask, belongsToChat } from '../src/ui-state.js';
 import { Captures } from '../src/captures.js';
 import { loadPythonInputs } from '../src/python-inputs.js';
 import {
@@ -50,6 +51,33 @@ const fail = async fn => {
   assert(failed, 'Ожидалась ошибка');
 };
 let store, files, root, browser, c;
+test('UI: состояние контроллера, отсутствие ложного финала и дублирующих инструкций', async () => {
+  const s = StateStore.fresh('ui');
+  s.modelTabId = 1;
+  s.modelChatURL = 'https://chat.deepseek.com/a/chat/a';
+  s.current = 'Собираю данные';
+  s.status = 'paused';
+  s.phase = 'executing';
+  s.reason = 'Ответ DeepSeek пока не подтверждён. Можно написать продолжай. Можно написать продолжай.';
+  const paused = projectTask(s);
+  assert(stateLabel(paused) === 'Пауза' && progressText(paused) === 'Пауза. Не удалось прочитать ответ DeepSeek.', 'Пауза имеет один короткий текст');
+  s.status = 'running';
+  s.phase = 'waiting';
+  assert(stateLabel(projectTask(s)) === 'Проверяет ответ', 'Ожидание не выдаётся за выполнение инструмента');
+  s.last = {
+    id: 'done',
+    status: 'ok'
+  };
+  s.commands.done = {
+    command: command('done', 'task.finish', {
+      summary: 'Ответ'
+    })
+  };
+  assert(!projectTask(s).final, 'Команды модели недостаточно для подтверждения финала');
+  s.status = 'completed';
+  assert(projectTask(s).final.text === 'Ответ' && !progressText(projectTask(s)), 'Готовый ответ не сопровождается старой строкой работы');
+  assert(!belongsToChat(projectTask(s), 'https://chat.deepseek.com/a/chat/b', 1), 'Состояние не попадает в другой чат');
+});
 test('JSON: корректная команда, запрет лишних полей и инструментов', async () => {
   parseCommand(JSON.stringify(command('a', 'browser.open', {
     url: 'https://example.org/'

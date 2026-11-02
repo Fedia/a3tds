@@ -1,6 +1,6 @@
 {
   "date": "2026-11-02",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "viewport": {
     "width": 390,
     "height": 844
@@ -25,6 +25,13 @@
     "final summary visible in chat",
     "continue in chat resumes the same stopped task without settings",
     "old Python operation sealed without rerun",
-    "nested per-task output paths and download verified"
+    "nested per-task output paths and download verified",
+    "agent runs with legacy cloud-consent=false",
+    "toolbar relocation preserves running executor and Python",
+    "compact settings and inline chat toolbar in light and dark themes",
+    "single authoritative pause message with no tool status cards",
+    "final summary appears only after controller acceptance",
+    "conditional folder and site access controls",
+    "automatic scripting fallback respects manual interruption"
   ]
 }

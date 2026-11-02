@@ -141,12 +141,20 @@ export function deepseekDOM(action, config, payload) {
     const ready = inspect().status === 'ready';
     const answers = nodes.map((node, i) => ({
       source: node.querySelector('.ds-assistant-message-main-content') || node,
+      turn: node,
+      copy: all('button,[role=button]', node).find(e => /copy|копировать|复制/i.test(label(e)) || icon(e, 'M6.14929 4.02032')),
       raw: responses([node])[0],
       complete: !!completion(node) && (i < nodes.length - 1 || ready)
     }));
     const context = all('.ds-message').filter(node => !node.querySelector('.ds-assistant-message-main-content'))
       .filter(node => /^(Режим браузерного агента\.|Исправь предыдущий JSON\.)/.test(node.textContent.trim()))
-      .map(source => ({ source, raw: source.textContent.trim(), complete: true, context: true }));
+      .map(source => ({
+        source,
+        turn: source.closest('.ds-virtual-list-visible-items > div') || source,
+        raw: source.textContent.trim(),
+        complete: true,
+        context: true
+      }));
     return [...answers, ...context];
   }
   if (action === 'inspect') return inspect();
@@ -155,8 +163,12 @@ export function deepseekDOM(action, config, payload) {
     const draft = (input?.value ?? input?.innerText ?? '');
     const users = userNodes();
     const same = e => e.textContent.trim() === payload.trim();
-    return { draft: draft === payload ? 'exact' : draft.trim() ? 'other' : 'empty',
-      posted: users.some(same), latest: users.length > 0 && same(users.at(-1)), userCount: users.length };
+    return {
+      draft: draft === payload ? 'exact' : draft.trim() ? 'other' : 'empty',
+      posted: users.some(same),
+      latest: users.length > 0 && same(users.at(-1)),
+      userCount: users.length
+    };
   }
   if (action === 'clear-task') {
     const input = one('input');
@@ -200,7 +212,10 @@ export function deepseekDOM(action, config, payload) {
   }
   if (action === 'submit') {
     const send = one('send');
-    if (!send || disabled(send)) return { attempted: false, reason: 'Чат пока не разрешил отправку' };
+    if (!send || disabled(send)) return {
+      attempted: false,
+      reason: 'Чат пока не разрешил отправку'
+    };
     send.click();
     return {
       attempted: true

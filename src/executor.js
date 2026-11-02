@@ -31,10 +31,14 @@ const store = await new StateStore().init();
 const files = new ProjectFiles(store);
 const model = new DeepSeekAdapter(store);
 const python = new PythonRuntime();
+const savedTask = await store.get('task');
+const heldLocks = await navigator.locks?.query();
+if (savedTask && !heldLocks?.held.some(lock => lock.name === 'psy-agent-execution')) await store.save(StateStore.recover(savedTask));
 let controller = null,
   browser = null,
   handling = false,
-  cancellation = 0;
+  cancellation = 0,
+  agentEnabled = false;
 const capabilities = () => ({
   debugger: !!chrome.debugger?.attach,
   scripting: !!chrome.scripting?.executeScript,
@@ -53,13 +57,14 @@ async function notice(text) {
     });
   } catch {}
 }
-async function connect({ allowGenerating = false } = {}) {
+async function connect({
+  allowGenerating = false
+} = {}) {
   const caps = capabilities();
   assert(caps.scripting && caps.sessionStorage && caps.worker && caps.locks,
     'В браузере недоступны scripting, session storage, Web Locks или Worker. Подробности — в диагностике настроек.'
   );
-  const options = await chrome.storage.local.get(['cloud-consent', 'chat-bindings', 'browser-mode']);
-  assert(options['cloud-consent'] === true, 'Разрешите передачу данных в настройках');
+  const options = await chrome.storage.local.get(['chat-bindings', 'browser-mode', 'browser-auto-fallback']);
   await files.restore();
   await files.permission();
   const state = await model.connect(tabId, options['chat-bindings'] || {});
@@ -80,6 +85,7 @@ async function restoreController(options = {}) {
     assert(result?.approved, 'Пользователь отказал');
   });
   browser.transport = settings['browser-mode'] || 'auto';
+  browser.autoFallback = !!settings['browser-auto-fallback'];
   controller = new AgentController({
     store,
     files,
@@ -102,9 +108,12 @@ async function runLocked(message, respond) {
       ifAvailable: true
     }, async lock => {
       assert(lock, 'Агент выполняется в другом чате');
+      assert(agentEnabled, 'Включите режим агента в чате');
       const continuing = message.command === 'resume' || message.command === 'chat-task' &&
         /^(продолжай|продолжи|продолжить|возобнови|дальше)[.!\s]*$/i.test(message.task?.trim() || '');
-      await restoreController({ allowGenerating: continuing });
+      await restoreController({
+        allowGenerating: continuing
+      });
       assert(generation === cancellation, 'Запуск отменён');
       if (message.command === 'chat-task' && !continuing) {
         // A new task archives uncertainty; it never resumes or retries the old command.
@@ -122,13 +131,13 @@ async function runLocked(message, respond) {
         assert(controller.s, 'Нет задачи для восстановления');
         const chatURL = (await chrome.tabs.get(tabId)).url;
         let sameChat = controller.s.modelChatURL ? controller.s.modelChatURL === chatURL : controller.s.modelTabId === tabId;
-        if (!sameChat && controller.s.outbound && controller.s.modelChatURL &&
-            ['/', '/a/chat', '/a/chat/'].includes(new URL(controller.s.modelChatURL).pathname)) {
+        if (!sameChat && controller.s.outbound && controller.s.modelChatURL && ['/', '/a/chat', '/a/chat/'].includes(new URL(controller.s.modelChatURL).pathname)) {
           const delivery = await model.dom('delivery', controller.s.outbound.prompt);
           sameChat = delivery.posted && delivery.latest;
           if (sameChat) controller.s.modelChatURL = chatURL;
         }
         assert(sameChat, 'Эта задача относится к другому чату. Можно отправить здесь новую задачу.');
+        controller.s.modelTabId = tabId;
         if (continuing && message.command === 'chat-task') await model.dom('clear-task', message.task);
         if (continuing && controller.s.status === 'stopped') controller.s.status = 'paused';
         if (message.command === 'reconcile') await controller.reconcileCommand(message.note);
@@ -152,8 +161,7 @@ async function runLocked(message, respond) {
       } catch (e) {
         await notice(e.message);
       }
-      if (controller.s.status === 'paused') await notice('Агент приостановлен: ' + controller.s
-        .reason + '\nМожно написать «продолжай» или отправить новую задачу.');
+      // The controller projection is displayed once in chat; no duplicate pause notification.
     });
   } finally {
     handling = false;
@@ -173,7 +181,11 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   (async () => {
     if (message.command === 'engine-ping') {
       respond({
-        ok: true
+        ok: true,
+        data: {
+          tabId,
+          chatURL: (await chrome.tabs.get(tabId)).url
+        }
       });
       return;
     }
@@ -193,6 +205,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       return;
     }
     if (message.command === 'chat-stop') {
+      agentEnabled = false;
       cancellation++;
       if (controller && (handling || controller.running)) await controller.stop();
       respond({
@@ -202,6 +215,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }
     if (message.command === 'chat-ready') {
       await connect();
+      agentEnabled = true;
       respond({
         ok: true,
         data: capabilities()
@@ -229,9 +243,6 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     error: e.message
   }));
   return true;
-});
-chrome.storage.onChanged.addListener(changes => {
-  if (changes['cloud-consent']?.newValue === false && controller?.running) void controller.stop();
 });
 window.addEventListener('pagehide', () => {
   model.cancel();

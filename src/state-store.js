@@ -1,4 +1,7 @@
 import {
+  projectTask
+} from './ui-state.js';
+import {
   assert
 } from './util.js';
 export class StateStore {
@@ -37,15 +40,18 @@ export class StateStore {
   }
   async save(s) {
     await this.put('task', structuredClone(s));
-    if (this.name === 'psy-agent') await chrome.storage.local.set({
-      summary: {
-        status: s.status,
-        message: s.reason || s.current || '',
-        updated: Date.now(),
-        files: s.files,
-        ownerTabId: s.modelTabId
+    if (this.name === 'psy-agent') {
+      const summary = projectTask(s),
+        final = summary.final;
+      const values = {
+        summary
+      };
+      if (final) {
+        const previous = (await chrome.storage.local.get('ui-finals'))['ui-finals'] || [];
+        values['ui-finals'] = [...previous.filter(item => item.taskId !== s.id), final].slice(-50);
       }
-    });
+      await chrome.storage.local.set(values);
+    }
   }
   static fresh(task) {
     return {

@@ -1,74 +1,209 @@
 /* Isolated content script. Page scripts cannot call the extension message bridge. */
 (async () => {
   const {
-    deepseekDOM, bindingSelector, bindingTarget
+    deepseekDOM,
+    bindingSelector,
+    bindingTarget
   } = await import(chrome.runtime.getURL('src/chat-dom.js'));
+  const {
+    mountFinalAnswers
+  } = await import(chrome.runtime.getURL('src/final-view.js'));
+  const {
+    stateLabel,
+    progressText,
+    shortReason,
+    belongsToChat
+  } = await import(chrome.runtime.getURL('src/ui-state.js'));
   let enabled = false,
     busy = false,
     config = {},
-    picking = false;
+    picking = false,
+    ownerTabId = null,
+    currentState = null,
+    finals = [],
+    lastURL = location.href;
+  // The executor has a stable root. Moving the toolbar during SPA layout changes must not reload it.
+  const engineHost = document.createElement('div');
+  engineHost.hidden = true;
+  const engineShadow = engineHost.attachShadow({
+    mode: 'closed'
+  });
+  const executor = document.createElement('iframe');
+  executor.src = chrome.runtime.getURL('executor.html');
+  executor.hidden = true;
+  executor.title = 'Agent executor';
+  engineShadow.append(executor);
+  document.documentElement.append(engineHost);
   const host = document.createElement('div');
+  host.dataset.psyAgentToolbar = '';
+  host.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;flex:0 0 auto;max-width:100%;min-width:0';
   const shadow = host.attachShadow({
     mode: 'closed'
   });
   const style = document.createElement('style');
   style.textContent = `
-    :host{position:fixed;right:max(8px,env(safe-area-inset-right));top:max(8px,env(safe-area-inset-top));z-index:2147483646;max-width:calc(100vw - 16px)}
-    div{display:flex;align-items:center;gap:8px;background:#fff;color:#222;padding:4px 8px;border:1px solid #aaa;border-radius:10px;font:16px system-ui;box-sizing:border-box}
-    button,label{min-height:44px;display:flex;align-items:center;cursor:pointer;touch-action:manipulation;font:inherit}
-    button{padding:0 12px;border:1px solid #aaa;border-radius:6px;background:#f5f5f5;color:#222}
-    input{width:22px;height:22px;margin-right:8px}
+    :host{font:14px system-ui;color:inherit;box-sizing:border-box}
+    .bar{display:flex;align-items:center;gap:4px;white-space:nowrap;height:44px;max-width:100%}
+    label,button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;touch-action:manipulation;font:inherit;color:inherit;cursor:pointer;box-sizing:border-box}
+    label{gap:7px;padding:0 6px}button{width:44px;border:0;background:transparent;border-radius:8px;font-size:23px}
+    button:hover{background:color-mix(in srgb,currentColor 8%,transparent)}
+    input{appearance:none;width:32px;height:20px;margin:0;border:1px solid #89929f;border-radius:12px;background:#89929f;position:relative}
+    input:before{content:'';position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:white}
+    input:checked{background:#4d6bfe;border-color:#4d6bfe}input:checked:before{left:14px}
+    input:focus-visible,button:focus-visible{outline:2px solid #4d6bfe;outline-offset:2px}
+    .status{font-size:12px;opacity:.7;max-width:105px;overflow:hidden;text-overflow:ellipsis}
+    @media(max-width:600px){.status{max-width:85px}}
   `;
   const bar = document.createElement('div');
+  bar.className = 'bar';
   const label = document.createElement('label');
   const toggle = document.createElement('input');
   toggle.type = 'checkbox';
-  label.append(toggle, ' Агент');
+  toggle.setAttribute('role', 'switch');
+  toggle.setAttribute('aria-label', 'Режим агента');
+  label.append(toggle, 'Агент');
+  const badge = document.createElement('span');
+  badge.className = 'status';
   const settings = document.createElement('button');
-  settings.textContent = 'Настройки';
-  bar.append(label, settings);
+  settings.textContent = '⚙';
+  settings.title = 'Настройки';
+  settings.setAttribute('aria-label', 'Настройки');
+  bar.append(label, badge, settings);
   shadow.append(style, bar);
-  document.documentElement.append(host);
-  // Extension-origin executor stays with the foreground chat, not the settings tab.
-  const executor = document.createElement('iframe');
-  executor.src = chrome.runtime.getURL('executor.html');
-  executor.hidden = true;
-  executor.title = 'Agent executor';
-  shadow.append(executor);
+  const progress = document.createElement('div');
+  progress.className = 'psy-agent-progress';
+  progress.setAttribute('role', 'status');
+  progress.setAttribute('aria-live', 'polite');
+  progress.style.cssText = 'display:none;flex:0 0 auto;padding:6px 12px;font:13px/1.45 system-ui;overflow-wrap:anywhere;max-width:100%;box-sizing:border-box';
+  let transient = '',
+    noticeTimer;
+  const send = message => chrome.runtime.sendMessage(message);
+  const inputElement = () => deepseekDOM('elements', config).input;
+  const nativeColor = () => getComputedStyle(document.querySelector('.the-header') || inputElement() || document.body).color;
+  const activeState = () => belongsToChat(currentState, location.href, ownerTabId) ? currentState : null;
+  const acceptedFinals = () => finals.filter(item => item.chatURL === location.href);
+  const view = () => mountFinalAnswers(() => deepseekDOM('answer-elements', config), {
+    getFinals: acceptedFinals,
+    color: nativeColor
+  });
+  let unmountView = () => {};
+
+  function paint() {
+    const state = activeState();
+    const label = enabled ? stateLabel(state) : 'Выключен';
+    if (badge.textContent !== label) badge.textContent = label;
+    toggle.title = enabled ? stateLabel(state) : 'Включить режим агента';
+    const text = transient || progressText(state);
+    if (progress.textContent !== text) progress.textContent = text;
+    const display = text ? 'block' : 'none',
+      color = nativeColor();
+    if (progress.style.display !== display) progress.style.display = display;
+    if (progress.style.color !== color) progress.style.color = color;
+    if (host.style.color !== color) host.style.color = color;
+  }
+  const showNotice = text => {
+    transient = text ? shortReason(text) : '';
+    clearTimeout(noticeTimer);
+    paint();
+    if (transient) noticeTimer = setTimeout(() => {
+      transient = '';
+      paint();
+    }, 8000);
+  };
+  const composerAnchor = composer => {
+    const form = composer.closest('form');
+    if (form) return form;
+    const parent = composer.parentElement;
+    if (parent === document.body || parent === document.documentElement) return composer;
+    const grand = parent.parentElement;
+    return grand === document.body || grand === document.documentElement ? parent : grand;
+  };
+
+  function place() {
+    document.querySelectorAll('[data-psy-agent-toolbar]').forEach(node => {
+      if (node !== host) node.remove();
+    });
+    if (location.href !== lastURL) {
+      const old = new URL(lastURL).pathname;
+      lastURL = location.href;
+      if (enabled && !['/', '/a/chat', '/a/chat/'].includes(old)) {
+        enabled = false;
+        toggle.checked = false;
+        void send({
+          type: 'chat-stop'
+        });
+      }
+    }
+    const header = document.querySelector('.the-header,header,[role=banner]');
+    const composer = inputElement();
+    if (header) {
+      if (!header.contains(host) && host.previousElementSibling !== header) header.append(host);
+      if (header.contains(host) && (header.scrollWidth > header.clientWidth + 2 || host.getBoundingClientRect().height > 48)) header.after(host);
+    } else if (composer) {
+      const anchor = composerAnchor(composer);
+      if (host.nextElementSibling !== progress || progress.nextElementSibling !== anchor) anchor.before(host, progress);
+    } else if (!host.isConnected) document.body.prepend(host);
+    if (composer) {
+      const anchor = composerAnchor(composer);
+      if (anchor.previousElementSibling !== progress) anchor.before(progress);
+    } else if (host.nextElementSibling !== progress) host.after(progress);
+    paint();
+  }
+  let placementTimer;
+  new MutationObserver(() => {
+      if (placementTimer) return;
+      placementTimer = setTimeout(() => {
+        placementTimer = null;
+        place();
+      }, 100);
+    })
+    .observe(document.body, {
+      childList: true,
+      subtree: true
+    });
+  window.addEventListener('resize', place);
+  async function load() {
+    const values = await chrome.storage.local.get(['chat-bindings', 'summary', 'ui-finals']);
+    config = values['chat-bindings'] || {};
+    currentState = values.summary || null;
+    finals = values['ui-finals'] || [];
+  }
   async function ensureExecutor() {
     for (let attempt = 0; attempt < 20; attempt++) {
       try {
-        if ((await chrome.runtime.sendMessage({
-            type: 'engine-ping'
-          }))?.ok) return;
+        const result = await send({
+          type: 'engine-ping'
+        });
+        if (result?.ok) {
+          ownerTabId = result.data?.tabId ?? ownerTabId;
+          paint();
+          return;
+        }
       } catch {}
       await new Promise(resolve => setTimeout(resolve, 150));
     }
-    throw new Error(
-      'Встроенный исполнитель недоступен. Обновите DeepSeek; если ошибка повторяется, откройте диагностику настроек.'
-    );
+    throw new Error('Не удалось подключиться к чату. Обновите страницу DeepSeek.');
   }
-  const notice = document.createElement('span');
-  notice.setAttribute('role', 'status');
-  notice.style.cssText = 'display:none;max-width:260px;font-size:13px';
-  bar.append(notice);
-  const showNotice = text => { notice.textContent = text; notice.style.display = text ? 'block' : 'none'; };
-  const send = message => chrome.runtime.sendMessage(message);
-  const load = async () => {
-    config = (await chrome.storage.local.get('chat-bindings'))['chat-bindings'] || {};
-  };
-  const { mountFinalAnswers } = await import(chrome.runtime.getURL('src/final-view.js'));
   await load();
-  let unmountView = mountFinalAnswers(() => deepseekDOM('answer-elements', config));
+  unmountView = view();
+  place();
+  void ensureExecutor().catch(() => {});
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local' && changes['chat-bindings']) config = changes['chat-bindings'].newValue || {};
+    if (area !== 'local') return;
+    if (changes['chat-bindings']) config = changes['chat-bindings'].newValue || {};
+    if (changes.summary) currentState = changes.summary.newValue || null;
+    if (changes['ui-finals']) finals = changes['ui-finals'].newValue || [];
+    if (changes.summary) transient = '';
+    paint();
+    if (changes['ui-finals']) unmountView.refresh?.();
   });
   settings.onclick = () => send({
     type: 'open-workspace'
   });
   toggle.onchange = async () => {
-    showNotice('');
+    transient = '';
     enabled = toggle.checked;
+    paint();
     if (!enabled) {
       await send({
         type: 'chat-stop'
@@ -81,8 +216,15 @@
       const result = await send({
         type: 'chat-ready'
       });
-      if (!result?.ok) throw new Error(result?.error || 'Откройте настройки и выберите папку проекта.');
-
+      if (!result?.ok) throw new Error(result?.error || 'Выберите хранилище результатов.');
+      const seen = await chrome.storage.local.get('agent-data-notice');
+      if (!seen['agent-data-notice']) {
+        transient = 'Задача и выбранные данные передаются в ваш чат DeepSeek.';
+        paint();
+        await chrome.storage.local.set({
+          'agent-data-notice': true
+        });
+      }
     } catch (e) {
       enabled = false;
       toggle.checked = false;
@@ -242,7 +384,7 @@
     } finally {
       hint.remove();
       picking = false;
-      unmountView = mountFinalAnswers(() => deepseekDOM('answer-elements', config));
+      unmountView = view();
     }
   }
 })();

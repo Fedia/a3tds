@@ -1,13 +1,17 @@
 {
   "date": "2026-11-02",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 27,
+  "passed": 28,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
   "extensionLoadVerified": false,
   "results": [
+    {
+      "name": "UI: состояние контроллера, отсутствие ложного финала и дублирующих инструкций",
+      "ok": true
+    },
     {
       "name": "JSON: корректная команда, запрет лишних полей и инструментов",
       "ok": true

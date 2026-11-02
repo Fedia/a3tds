@@ -18,7 +18,7 @@ async def main():
  async with async_playwright() as p:
   b=await p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN') or shutil.which('chromium'),headless=True,args=['--no-sandbox'])
   context=await b.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True)
-  pages={};shared={'cloud-consent':True,'file-mode':'browser','browser-mode':'scripting','chat-bindings':{'input':'#composer','send':'#send','response':'.answer','complete':'.complete'}}
+  pages={};shared={'cloud-consent':False,'file-mode':'browser','browser-mode':'scripting','chat-bindings':{'input':'#composer','send':'#send','response':'.answer','complete':'.complete'}}
   async def dispatch(source,msg,target=None):
    origin=source['frame'];url=origin.url;page=source['page'];tabid=next((n for n,x in pages.items() if x==page),None)
    sender={'id':'test-extension','url':url,'frameId':0 if origin==page.main_frame else 1}
@@ -40,7 +40,13 @@ async def main():
    if op=='message':return await dispatch(source,arg)
    if op=='tab-message':return await dispatch(source,arg['message'],arg['id'])
    if op=='get-storage':return {k:shared.get(k) for k in ([arg] if isinstance(arg,str) else arg)}
-   if op=='set-storage':shared.update(arg);return None
+   if op in ['set-storage','set-session']:
+    changes={k:{'oldValue':shared.get(k),'newValue':v} for k,v in arg.items() if shared.get(k)!=v};shared.update(arg)
+    async def changed(frame):
+     try:await frame.evaluate('([changes,area])=>{for(const fn of window.storageListeners||[])fn(changes,area)}',[changes,'session' if op=='set-session' else 'local'])
+     except Exception:pass
+    if changes:await asyncio.gather(*(changed(f) for q in context.pages for f in q.frames))
+    return None
    if op=='current':return next(({'id':n,'url':source['page'].url} for n,v in pages.items() if v==source['page']),None)
    if op=='get-tab':return {'id':arg,'url':'https://chat.deepseek.com/a/chat/test' if arg==1 else pages[arg].url,'status':'complete'}
    if op=='query':return [{'id':1,'url':'https://chat.deepseek.com/a/chat/test','title':'DeepSeek fixture'}]
@@ -49,10 +55,10 @@ async def main():
    if op=='permission':return True
    raise Exception(op)
   await context.expose_binding('bridge',bridge)
-  script='''window.listeners=[];const evt={addListener(){}};
-window.chrome={runtime:{id:'test-extension',getURL:p=>EXT+p,onMessage:{addListener:f=>listeners.push(f)},sendMessage:m=>bridge('message',m)},action:{onClicked:evt},permissions:{request:()=>bridge('permission',{})},storage:{local:{get:k=>bridge('get-storage',k),set:v=>bridge('set-storage',v)},session:{get:k=>bridge('get-storage',k),set:v=>bridge('set-storage',v)},onChanged:evt},tabs:{getCurrent:()=>bridge('current',null),get:id=>bridge('get-tab',id),query:q=>bridge('query',q),update:id=>bridge('update',id),onRemoved:evt,sendMessage:(id,message)=>bridge('tab-message',{id,message})},scripting:{executeScript:a=>bridge('script',{id:a.target.tabId,source:a.func.toString(),args:a.args})}};
+  script='''window.localView=value=>{if(location.href.startsWith(CHAT)&&value){if(value.ownerURL==='https://chat.deepseek.com/a/chat/test')value.ownerURL=location.href;if(value.chatURL==='https://chat.deepseek.com/a/chat/test')value.chatURL=location.href;}return value};window.listeners=[];window.storageListeners=[];const evt={addListener(){}};
+window.chrome={runtime:{id:'test-extension',getURL:p=>EXT+p,onMessage:{addListener:f=>listeners.push(f)},sendMessage:m=>bridge('message',m)},action:{onClicked:evt},permissions:{request:()=>bridge('permission',{}),contains:()=>bridge('permission',{})},storage:{local:{get:async k=>{const d=await bridge('get-storage',k);if(d.summary)localView(d.summary);if(d['ui-finals'])d['ui-finals'].forEach(localView);return d},set:v=>bridge('set-storage',v)},session:{get:k=>bridge('get-storage',k),set:v=>bridge('set-session',v)},onChanged:{addListener:f=>storageListeners.push((changes,area)=>{if(changes.summary?.newValue)localView(changes.summary.newValue);if(changes['ui-finals']?.newValue)changes['ui-finals'].newValue.forEach(localView);f(changes,area)})}},tabs:{getCurrent:()=>bridge('current',null),get:id=>bridge('get-tab',id),query:q=>bridge('query',q),update:id=>bridge('update',id),onRemoved:evt,sendMessage:(id,message)=>bridge('tab-message',{id,message})},scripting:{executeScript:a=>bridge('script',{id:a.target.tabId,source:a.func.toString(),args:a.args})}};
 const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=function(options){const r=attach.call(this,options);window.testShadow=r;return r};window.alert=text=>{window.lastAlert=text};window.confirm=()=>{throw new Error('Unexpected confirmation')};
-'''.replace('EXT',json.dumps(EXT))
+'''.replace('EXT',json.dumps(EXT)).replace('CHAT',json.dumps(CHAT))
   await context.add_init_script(script)
   # Empty page hosts the actual service worker source with emulated Chrome API transport.
   sw=await context.new_page();await sw.goto(EXT+'service-worker-host');await sw.add_script_tag(url=EXT+'src/service-worker.js')
@@ -68,7 +74,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    };
   }''')
   await chat.add_script_tag(url=EXT+'src/chat-ui.js')
-  settings=await context.new_page();pages[2]=settings;await settings.goto(EXT+'workspace.html');await settings.wait_for_selector('#internal')
+  settings=await context.new_page();pages[2]=settings;await settings.goto(EXT+'workspace.html');await settings.wait_for_selector('#folder')
   assert await settings.evaluate('document.documentElement.scrollWidth <= innerWidth')
   await settings.close();print('Settings closed',flush=True)
   await chat.wait_for_timeout(500)
@@ -98,7 +104,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   }""")
   assert await chat.locator('.answer').count()==2
   await chat.wait_for_selector('.psy-agent-final')
-  assert await chat.locator('.psy-agent-final').inner_text() == 'Ответ агента\nСумма равна 6'
+  assert await chat.locator('.psy-agent-final').inner_text() == 'Сумма равна 6'
   frame=next(f for f in chat.frames if f.url==EXT+'executor.html')
   result=await frame.evaluate("""async path=>{
     let d=await(await navigator.storage.getDirectory()).getDirectoryHandle('agent-results');
@@ -107,7 +113,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   }""",result_path)
   assert result['result']['sum']==6
   settings=await context.new_page();pages[2]=settings;await settings.goto(EXT+'workspace.html')
-  await settings.locator('#diagnose').click();await settings.wait_for_selector('#files button')
+  await settings.locator('#files-toggle').click();await settings.wait_for_selector('#files button')
   assert await settings.evaluate('document.documentElement.scrollWidth <= innerWidth')
   async with settings.expect_download() as pending:
    await settings.locator('#files button').first.click()
@@ -122,6 +128,10 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    await asyncio.sleep(.2)
   assert shared['summary']['message']=='loop'
   await asyncio.sleep(2)
+  await frame.evaluate("window.testRuntimeToken='unchanged'")
+  await chat.evaluate("const h=document.createElement('header');h.className='the-header';document.body.prepend(h)")
+  await chat.wait_for_timeout(300)
+  assert await frame.evaluate("window.testRuntimeToken==='unchanged'"), 'Moving the toolbar must not reload the executor'
   await chat.evaluate("testShadow.querySelector('input').click()")
   for i in range(30):
    if shared.get('summary',{}).get('status')=='stopped':break

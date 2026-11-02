@@ -1,10 +1,39 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>Настройки агента</title><link rel="stylesheet" href="style.css"><main>
-<h1>Настройки агента DeepSeek</h1>
-<p>Отправляйте задачи обычным полем DeepSeek при включённом переключателе «Агент». Настройки можно закрыть: исполнитель работает внутри вкладки чата. Во время задачи оставляйте DeepSeek открытым на экране.</p>
-<section><h2>Результаты</h2><button id="folder">Выбрать папку</button><button id="internal">Хранить внутри браузера</button><button id="permission">Восстановить доступ к папке</button><p id="folder-name"></p>
-<p>На телефоне используйте внутреннее хранилище, если выбор папки недоступен. Готовые файлы можно скачать ниже. Не удаляйте данные расширения до скачивания результатов.</p>
-<p>В DeepSeek передаются задача, извлечённые тексты и результаты инструментов.</p><label><input id="consent" type="checkbox">Разрешаю передачу данных задачи в мой чат DeepSeek</label></section>
-<section><h2>Привязка интерфейса</h2><p>Откройте чат с готовым ответом. Мастер попросит коснуться поля сообщения, отправки, текста ответа и кнопки копирования того же ответа. Кнопка «Отменить» доступна без клавиатуры.</p><button id="refresh-tabs">Обновить список</button><select id="deepseek-tab"></select><button id="pick">Привязать элементы касаниями</button></section>
-<section><h2>Совместимость браузера</h2><label><input id="compatible" type="checkbox">Использовать стандартные API страниц вместо CDP</label><p>Включите, если мобильный браузер не поддерживает debugger. Потребуется доступ к сайтам. Некоторые сайты не принимают программные клики или ввод — такие действия могут потребовать ручного выполнения.</p><button id="site-permission">Разрешить доступ к сайтам</button><button id="diagnose">Проверить возможности и показать файлы</button><p id="status" role="status"></p><ul id="files"></ul></section>
-<details><summary>Восстановление</summary><p>Выберите исходный чат задачи перед восстановлением. Проверьте, какие действия уже произошли.</p><textarea id="note" placeholder="Результат ручной проверки незавершённого действия"></textarea><button id="reconcile">Зафиксировать проверку</button><button id="recover-send">Принять завершённый ответ</button><button id="reset-tabs">Забыть вкладки прошлого сеанса</button><button id="resume">Продолжить задачу</button><p><a href="tests/index.html" target="_blank">Проверки</a></p></details>
-</main><script type="module" src="src/workspace.js"></script></html>
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Настройки агента</title>
+<link rel="stylesheet" href="style.css">
+<main class="settings">
+  <h1>Настройки</h1>
+  <section class="settings-card" aria-label="Основные настройки">
+    <div class="setting-row">
+      <div><strong>Результаты</strong><p id="folder-name">Не выбрано</p></div>
+      <button id="folder" aria-expanded="false" aria-controls="storage-options">Изменить</button>
+    </div>
+    <div id="storage-options" class="storage-options" hidden>
+      <button id="choose-folder">Папка устройства</button>
+      <button id="internal">Внутри браузера</button>
+      <small id="storage-hint"></small>
+    </div>
+    <div class="setting-row"><strong>DeepSeek</strong><span id="chat-status">Проверяю…</span></div>
+    <div id="access-row" class="setting-row" hidden>
+      <span id="access-label">Нужен доступ</span><button id="access">Предоставить</button>
+    </div>
+    <div class="setting-row"><span id="file-count">Файлы результатов</span><button id="files-toggle" aria-expanded="false" aria-controls="files-panel">Файлы</button></div>
+  </section>
+  <p id="status" role="status" hidden></p>
+  <section id="files-panel" hidden aria-label="Файлы результатов"><p id="files-empty">Пока нет файлов</p><ul id="files"></ul></section>
+  <details id="advanced">
+    <summary>Дополнительно</summary>
+    <label id="chat-choice" hidden>Чат<select id="deepseek-tab"></select></label>
+    <label>Режим страниц<select id="mode"><option value="auto">Автоматически</option><option value="scripting">Совместимый</option></select></label>
+    <button id="pick">Привязать интерфейс</button>
+    <button id="diagnose">Диагностика</button>
+    <pre id="diagnostics" hidden></pre>
+    <p><a href="tests/index.html" target="_blank">Проверки расширения</a></p>
+  </details>
+  <p class="privacy-note">В режиме «Агент» задача и выбранные данные передаются в ваш чат DeepSeek.</p>
+</main>
+<script type="module" src="src/workspace.js"></script>
+</html>

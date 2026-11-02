@@ -86,6 +86,7 @@ readiness.ready=false означает, что страница могла не 
     this.model.reset?.();
     this.browser.reset?.();
     this.s.status = 'running';
+    this.s.phase = 'starting';
     this.s.reason = '';
     this.running = true;
     const epoch = ++this.epoch;
@@ -97,6 +98,8 @@ readiness.ready=false означает, что страница могла не 
       await this.save();
       if (epoch !== this.epoch || this.s.status !== 'running') return;
       if (this.s.outbound) {
+        this.s.phase = 'checking';
+        await this.save();
         this.s.received = await this.model.recoverExchange(this.s.outbound, async outbound => {
           this.s.outbound = outbound;
           await this.save();
@@ -116,6 +119,8 @@ readiness.ready=false означает, что страница могла не 
             prompt
           });
           await this.save();
+          this.s.phase = 'waiting';
+          await this.save();
           const journal = async outbound => {
             this.s.outbound = outbound;
             await this.save();
@@ -124,6 +129,8 @@ readiness.ready=false означает, что страница могла не 
             raw = await this.model.exchange(prompt, journal);
           } catch (e) {
             if (epoch !== this.epoch || this.s.status !== 'running' || !this.s.outbound || !this.model.recoverExchange) throw e;
+            this.s.phase = 'checking';
+            await this.save();
             raw = await this.model.recoverExchange(this.s.outbound, journal);
           }
           if (this.model.conversationURL) this.s.modelChatURL = await this.model.conversationURL();
@@ -166,6 +173,7 @@ readiness.ready=false означает, что страница могла не 
           command: c,
           started: Date.now()
         };
+        this.s.phase = 'executing';
         this.s.current = c.description;
         await this.save();
         let result;

@@ -278,7 +278,7 @@ export class BrowserTools {
     }, method, params), 20000, 'CDP ' + method);
   }
   useScripting() {
-    return this.transport === 'scripting' || !chrome.debugger?.attach;
+    return this.transport === 'scripting' || this.transport !== 'cdp' && this.autoFallback || !chrome.debugger?.attach;
   }
   reset() {
     this.generation++;
@@ -352,7 +352,25 @@ export class BrowserTools {
       assert(result, 'Страница недоступна. Разрешите доступ к сайтам в настройках.');
       return result.result;
     }
-    await this.attach(id);
+    try {
+      await this.attach(id);
+    } catch (e) {
+      if (this.transport !== 'cdp' && !this.interrupted && chrome.scripting?.executeScript) {
+        this.autoFallback = true;
+        let granted = false;
+        try {
+          granted = await chrome.permissions?.contains({
+            origins: ['http://*/*', 'https://*/*']
+          });
+        } catch {}
+        await chrome.storage.local.set({
+          'browser-auto-fallback': true,
+          'needs-site-access': !granted
+        });
+        return this.runOnce(id, op, args);
+      }
+      throw e;
+    }
     await this.check(id);
     const {
       frameTree
@@ -380,7 +398,9 @@ export class BrowserTools {
     const generation = this.generation;
     const active = () => {
       if (generation !== this.generation || this.interrupted) {
-        const error = new Error('Открытие страницы остановлено'); error.definite = true; throw error;
+        const error = new Error('Открытие страницы остановлено');
+        error.definite = true;
+        throw error;
       }
     };
     url = fixture ? new URL(url).href : safeURL(url);
@@ -390,7 +410,10 @@ export class BrowserTools {
       let entry = this.state.tabs.find(t => t.id === this.state.workTabId) || this.state.tabs.at(-1);
       for (const candidate of this.state.tabs) {
         const current = await this.check(candidate.id);
-        if ((current.pendingUrl || current.url) === url) { entry = candidate; break; }
+        if ((current.pendingUrl || current.url) === url) {
+          entry = candidate;
+          break;
+        }
       }
       const tab = await this.check(entry.id);
       active();
