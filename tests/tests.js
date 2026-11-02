@@ -214,10 +214,27 @@ test('Совместимый режим: snapshot, касание/клик, вв
     await chrome.tabs.remove(tab.tabId);
   }
 });
+test('Готовность страницы: отложенный текст, визуальная стабилизация, часы и отмена', async () => {
+  const state = { id: 'readiness-test', tabs: [] };
+  const tools = new BrowserTools(state, async () => {}, async () => {});
+  const tab = await tools.open(chrome.runtime.getURL('fixtures/readiness.html'), { fixture: true });
+  try {
+    const snapshot = await tools.run(tab.tabId, 'snapshot');
+    assert(snapshot.readiness.ready && snapshot.readiness.stableMs >= 1000 && snapshot.text.includes('+7'),
+      'Чтение дождалось содержимого, а не только загрузки вкладки');
+    await tools.execute('browser.click', { tabId: tab.tabId, snapshot: snapshot.snapshot,
+      element: snapshot.elements.find(e => e.label === 'Обновить').id });
+    assert((await tools.run(tab.tabId, 'snapshot')).text.includes('+9'), 'После действия дождались обновления данных');
+    const wait = tools.waitForPage(tab.tabId, { quietMs: 60000 });
+    setTimeout(() => tools.cancel(), 100);
+    await fail(() => wait);
+  } finally { await tools.detach(); await chrome.tabs.remove(tab.tabId); }
+});
 test('Автоматические действия: ссылки и поиск без вопросов; опасные кнопки отклоняются до клика', async () => {
   const tools = new BrowserTools({ tabs: [] }, async () => {}, async () => { throw new Error('Не должно быть вопросов'); });
   tools.transport = 'scripting';
   tools.check = async () => ({ url: 'https://example.org/search?q=test' });
+  tools.waitForPage = async () => ({ ready: true });
   let info = { tag: 'A', href: 'https://example.org/?page=2', navigation: true };
   let clicks = 0;
   tools.run = async (id, op) => {

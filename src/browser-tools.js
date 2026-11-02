@@ -1,3 +1,4 @@
+import { samplePageReadiness, waitForStablePage } from './page-readiness.js';
 import {
   assert,
   safeURL,
@@ -16,7 +17,13 @@ export function pageOperation(op, args) {
     };
     for (const name of ['input', 'change', 'keydown']) document.addEventListener(name, () => state.revision++,
       true);
-    new MutationObserver(() => state.revision++).observe(document, {
+    new MutationObserver(records => {
+      const ignored = 'head,script,style,nav,header,footer,aside,time,[role=navigation],[role=banner],[role=complementary],[data-ad],[data-ad-slot],.adsbygoogle';
+      if (records.some(record => {
+        const target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
+        return !target?.closest(ignored);
+      })) state.revision++;
+    }).observe(document, {
       subtree: true,
       childList: true,
       attributes: true,
@@ -52,6 +59,7 @@ export function pageOperation(op, args) {
     const full = text();
     return {
       url: location.href,
+      documentId: performance.timeOrigin,
       title: document.title,
       snapshot: state.token,
       text: full.slice(0, 9000),
@@ -96,6 +104,7 @@ export function pageOperation(op, args) {
       'Извлечение превышает 300000 символов; требуется более узкий источник');
     return {
       url: location.href,
+      documentId: performance.timeOrigin,
       title: document.title,
       method: 'dom-main-text-v1',
       kind: args.kind,
@@ -182,16 +191,19 @@ export class BrowserTools {
     this.attached = new Set();
     this.contexts = new Map();
     this.interrupted = false;
+    this.generation = 0;
     chrome.debugger?.onDetach?.addListener((source, reason) => {
       if (this.attached.delete(source.tabId)) {
         this.contexts.delete(source.tabId);
         this.interrupted = true;
+        this.cancel();
         this.onIntervention?.('Debugger отключён: ' + reason);
       }
     });
     chrome.tabs.onRemoved.addListener(id => {
       if (this.state.tabs.some(t => t.id === id)) {
         this.interrupted = true;
+        this.cancel();
         this.onIntervention?.('Рабочая вкладка закрыта пользователем');
       }
     });
@@ -202,7 +214,11 @@ export class BrowserTools {
     assert(ownership['owned-tab-' + id] === this.state.id,
       'Вкладка не подтверждена в текущем сеансе браузера. Сбросьте старые вкладки и откройте новые.');
     const t = await chrome.tabs.get(id);
-    if (!t.url?.startsWith(chrome.runtime.getURL('fixtures/'))) safeURL(t.url);
+    const fixture = url => url?.startsWith(chrome.runtime.getURL('fixtures/'));
+    if ((!t.url || t.url === 'about:blank') && t.pendingUrl) {
+      if (!fixture(t.pendingUrl)) safeURL(t.pendingUrl);
+    } else if (!fixture(t.url)) safeURL(t.url);
+    if (t.pendingUrl && !fixture(t.pendingUrl)) safeURL(t.pendingUrl);
     return t;
   }
   async recoverTabs() {
@@ -231,23 +247,47 @@ export class BrowserTools {
   useScripting() {
     return this.transport === 'scripting' || !chrome.debugger?.attach;
   }
+  reset() { this.generation++; this.interrupted = false; }
+  cancel() { this.generation++; }
+  async waitForPage(id, options = {}) {
+    const generation = this.generation;
+    return waitForStablePage(() => this.runOnce(id, 'readiness'), {
+      ...options, cancelled: () => generation !== this.generation || this.interrupted
+    });
+  }
   async run(id, op, args = {}) {
+    const generation = this.generation;
+    const reading = ['snapshot', 'extract'].includes(op);
+    const readiness = reading ? await this.waitForPage(id) : null;
     for (let attempt = 0; ; attempt++) {
-      try { return await this.runOnce(id, op, args); }
-      catch (e) {
-        if (attempt >= 1 || !['snapshot', 'extract', 'locate'].includes(op) || this.interrupted) throw e;
+      if (generation !== this.generation) throw new Error('Действие остановлено');
+      try {
+        const data = await this.runOnce(id, op, args);
+        if (generation !== this.generation) throw new Error('Действие остановлено');
+        if (reading) {
+          if (readiness.url !== data.url || data.documentId && readiness.documentId !== data.documentId) {
+            readiness.ready = false; readiness.reason = 'navigation_changed';
+          }
+          return { ...data, readiness };
+        }
+        if (op === 'scroll') return { ...data, readiness: await this.waitForPage(id) };
+        return data;
+      } catch (e) {
+        if (generation !== this.generation || attempt >= 1 ||
+            !['snapshot', 'extract', 'locate'].includes(op) || this.interrupted) throw e;
         await sleep(200);
       }
     }
   }
   async runOnce(id, op, args = {}) {
+    const operation = op === 'readiness' ? samplePageReadiness : pageOperation;
     if (this.useScripting()) {
       await this.check(id);
       const [result] = await timeout(chrome.scripting.executeScript({
         target: {
           tabId: id
         },
-        func: pageOperation,
+        func: operation,
         args: [op, args]
       }), 20000, 'Инструмент страницы');
       assert(result, 'Страница недоступна. Разрешите доступ к сайтам в настройках.');
@@ -266,7 +306,7 @@ export class BrowserTools {
       grantUniveralAccess: false
     });
     const r = await this.send(id, 'Runtime.evaluate', {
-      expression: `(${pageOperation.toString()})(${JSON.stringify(op)},${JSON.stringify(args)})`,
+      expression: `(${operation.toString()})(${JSON.stringify(op)},${JSON.stringify(args)})`,
       contextId: executionContextId,
       returnByValue: true
     });
@@ -293,22 +333,16 @@ export class BrowserTools {
       url, commandId
     });
     await this.save();
-    for (let i = 0; i < 100; i++) {
-      const t = await chrome.tabs.get(tab.id);
-      if (t.status === 'complete') break;
-      await sleep(100);
-    }
-    return {
-      tabId: tab.id,
-      url: (await this.check(tab.id)).url
-    };
+    return { tabId: tab.id, url: tab.pendingUrl || tab.url || url };
+
   }
   async execute(tool, a, context = {}) {
     const op = tool.split('.')[1];
     if (op === 'open') {
       const opened = await this.open(a.url, context);
       try {
-        return { ...opened, page: await this.run(opened.tabId, 'snapshot') };
+        const page = await this.run(opened.tabId, 'snapshot');
+        return { ...opened, url: page.url || opened.url, page };
       } catch (e) {
         // Navigation succeeded: report failed reading separately, never reopen blindly.
         return { ...opened, page: null, readError: { code: 'SNAPSHOT_FAILED', message: e.message },
@@ -342,10 +376,10 @@ export class BrowserTools {
         if (info.href && !fixture) safeURL(info.href);
         info = await this.run(a.tabId, 'locate', a);
       } catch (e) { e.definite = true; throw e; }
-      if (this.useScripting()) return this.run(a.tabId, 'interact', {
-        ...a,
-        action: op
-      });
+      if (this.useScripting()) {
+        const result = await this.run(a.tabId, 'interact', { ...a, action: op });
+        return { ...result, readiness: await this.waitForPage(a.tabId) };
+      }
       await this.send(a.tabId, 'Input.dispatchMouseEvent', {
         type: 'mousePressed',
         x: info.x,
@@ -369,7 +403,8 @@ export class BrowserTools {
       await this.run(a.tabId, 'invalidate').catch(() => {});
       return {
         performed: op,
-        requiresSnapshot: true
+        requiresSnapshot: true,
+        readiness: await this.waitForPage(a.tabId)
       };
     }
     return this.run(a.tabId, op, a);

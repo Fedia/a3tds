@@ -1,8 +1,8 @@
 {
-  "date": "2026-11-01",
-  "version": "0.2.6",
+  "date": "2026-11-02",
+  "version": "0.2.7",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 19,
+  "passed": 20,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -34,6 +34,10 @@
     },
     {
       "name": "Совместимый режим: snapshot, касание/клик, ввод и устаревшие ссылки без CDP",
+      "ok": true
+    },
+    {
+      "name": "Готовность страницы: отложенный текст, визуальная стабилизация, часы и отмена",
       "ok": true
     },
     {

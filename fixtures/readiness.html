@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Readiness fixture</title>
+<style>
+main { width: 400px; min-height: 100px; }
+#moving { position: relative; }
+#busy { width: 30px; height: 30px; }
+</style>
+<nav><time id="clock"></time></nav>
+<main aria-busy="true"><div id="busy" role="progressbar"></div><div id="moving"><p id="content">Загрузка…</p></div></main>
+<button id="change" aria-expanded="false">Обновить</button>
+<script src="readiness.js"></script>
