@@ -31,6 +31,9 @@ jobs:
             node --check "$file"
           done < <(find src fixtures tests -type f -name '*.js' -print0)
 
+      - name: Verify sandbox resource access contract
+        run: python3 .github/scripts/test_manifest.py
+
       - name: Validate local dependencies and create ZIP
         run: python3 .github/scripts/package.py
 
@@ -87,6 +90,8 @@ jobs:
           Сохранённая папка переиспользуется между запусками. При уже разрешённом доступе requestPermission больше не вызывается; повторные нажатия не создают несколько запросов.
 
           Python теперь работает фоновыми задачами без автоматического таймаута: модель проверяет прогресс и вывод через python.status и отменяет через python.cancel. Простые скрипты не загружают тяжёлые библиотеки. Добавлена совместимая загрузка локального WASM без streaming и сохранение результатов перед выгрузкой в папку.
+
+          Исправлен manifest: HTML и загрузчик изолированной среды Python доступны для вложенного iframe. Проверка этих ресурсов добавлена в CI; сторонние сайты не могут отправлять задания sandbox.
 
           Это предварительная версия. Локальные проверки пройдены; Titanium на устройстве, авторизованный DeepSeek и установка на Windows/macOS требуют ручной приёмки. Подробности — в VALIDATION.md.
           NOTES

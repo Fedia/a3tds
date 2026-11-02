@@ -1,8 +1,10 @@
 // Opaque origin: no extension APIs, IndexedDB, directory handles or page commands.
 let initialized = false;
 const nonce = location.hash.slice(1);
+// A public sandbox must only accept jobs from this extension's own parent.
+const trustedParentOrigin = location.protocol + '//' + location.host;
 window.addEventListener('message', event => {
-  if (event.source !== parent || event.data?.type !== 'python-start' || event.data.nonce !== nonce || initialized || event.ports.length !== 1) return;
+  if (event.source !== parent || event.origin !== trustedParentOrigin || event.data?.type !== 'python-start' || event.data.nonce !== nonce || initialized || event.ports.length !== 1) return;
   initialized = true;
   const port = event.ports[0];
   let worker, url, finished = false;

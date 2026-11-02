@@ -25,6 +25,22 @@ async def failed(page, code='result=1'):
 async def main():
  async with async_playwright() as p:
   browser=await p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN') or shutil.which('chromium'),args=['--no-sandbox'])
+  # Public WAR assets must not let an arbitrary website submit Python jobs.
+  page=await browser.new_page();await page.goto(BASE.replace('127.0.0.1','localhost')+'fixtures/article.html')
+  worker_requests=[];page.on('request',lambda r:worker_requests.append(r.url) if '/src/python-worker.js' in r.url else None)
+  received=await page.evaluate("""async base=>{
+    const frame=document.createElement('iframe');frame.sandbox='allow-scripts';frame.src=base+'python-sandbox.html#foreign-parent';
+    const ready=new Promise((resolve,reject)=>{
+      const listener=event=>{if(event.source===frame.contentWindow&&event.data?.type==='python-ready'){window.removeEventListener('message',listener);clearTimeout(timer);resolve()}};
+      const timer=setTimeout(()=>{window.removeEventListener('message',listener);reject(new Error('Public sandbox did not load'))},3000);
+      window.addEventListener('message',listener);
+    });document.body.append(frame);await ready;
+    const channel=new MessageChannel();let received=false;channel.port1.onmessage=()=>received=true;
+    frame.contentWindow.postMessage({type:'python-start',nonce:'foreign-parent',code:'result=42',data:{},files:[]},'*',[channel.port2]);
+    await new Promise(resolve=>setTimeout(resolve,500));channel.port1.close();frame.remove();return received;
+  }""",BASE)
+  assert not received and not worker_requests
+  await page.close();print('PASS: public sandbox rejects a foreign parent with a valid nonce and port',flush=True)
   # Silent/missing sandbox script must fail before the old universal 60-second timeout.
   page=await prepare(browser);await page.route('**/python-sandbox.html',lambda r:r.fulfill(body='<html></html>',content_type='text/html'))
   await page.evaluate('runtime.frameMs=200');result=await failed(page)

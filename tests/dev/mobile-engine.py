@@ -93,7 +93,8 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await chat.locator('#composer').fill('Посчитай сумму 1, 2 и 3 в Python')
   await chat.locator('#send').tap()
   for i in range(100):
-   if shared.get('summary',{}).get('status') in ['completed','paused','stopped']:break
+   summary=shared.get('summary',{})
+   if summary.get('status') in ['completed','paused','stopped'] and (summary.get('status')!='paused' or summary.get('phase')):break
    await asyncio.sleep(.3)
   summary=shared.get('summary',{});print('SUMMARY',summary,flush=True)
   assert summary.get('status')=='completed',await chat.evaluate('window.lastAlert')

@@ -1,6 +1,6 @@
 {
   "date": "2026-11-02",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "environment": "Chromium Linux; actual sandbox, Worker, WASM; simulated startup failures",
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -13,6 +13,7 @@
     "standard-library code loads no wheels; pandas omits matplotlib",
     "missing instantiateStreaming: same local WASM succeeds through byte instantiation",
     "incorrect WASM MIME: same local WASM succeeds through byte instantiation",
-    "cancellation during interpreter startup clears the frame"
+    "cancellation during interpreter startup clears the frame",
+    "foreign parent with valid nonce and MessagePort cannot start public sandbox"
   ]
 }

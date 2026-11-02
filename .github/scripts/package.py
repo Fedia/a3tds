@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import json
 import zipfile
+from check_manifest import validate_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "dist"
@@ -22,8 +23,7 @@ def local_file(relative):
 
 def package():
     manifest = json.loads(local_file("manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("manifest_version") != 3:
-        raise ValueError("Expected Manifest V3")
+    validate_manifest(ROOT, manifest)
     for relative in [
         manifest["background"]["service_worker"],
         *manifest["sandbox"]["pages"],
