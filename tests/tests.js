@@ -141,6 +141,24 @@ test('IndexedDB и File API: восстановление, конфликт, о�
   await fail(() => files.list());
   files.root = original;
 });
+test('Папка: живой handle сохраняется, доступ не запрашивается повторно, отзыв учитывается', async()=>{
+  const preferences={'file-mode':'directory','file-revision':'initial'};
+  const prefs={get:async keys=>Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(k=>[k,preferences[k]])),set:async values=>Object.assign(preferences,values)};
+  let loads=0,requests=0,permission='granted';
+  const root={name:'results',queryPermission:async()=>permission,requestPermission:async()=>{requests++;await sleep(5);permission='granted';return permission},async *entries(){yield ['result.csv',{kind:'file'}]}};
+  const memory=new Map([['directory',root]]);
+  const storage={get:async key=>{if(key==='directory')loads++;return memory.get(key)},put:async(key,value)=>memory.set(key,value),putMany:async entries=>entries.forEach(([k,v])=>memory.set(k,v))};
+  const f=new ProjectFiles(storage,prefs);await f.restore();const initial=f.root;
+  for(let i=0;i<10;i++){await f.restore();await f.list();await f.authorize()}
+  assert(loads===1&&f.root===initial&&requests===0,'Перезапуск/чтение не заменяют разрешённый handle и не показывают запрос');
+  permission='denied';await fail(()=>f.list());assert(requests===0,'Рабочая операция не запрашивает доступ сама');
+  await Promise.all([f.authorize(),f.authorize()]);assert(requests===1,'Два клика не создают два диалога');
+  await f.restore();assert(f.root===initial&&loads===1,'Собственный grant не теряет живой handle');
+  const other=new ProjectFiles(storage,prefs);await other.restore();assert(other.root===root,'Новый контекст восстанавливает выбранную папку');
+  const replacement={...root,name:'new-results'};memory.set('directory',replacement);preferences['file-revision']='changed';
+  await f.restore();assert(f.root===replacement,'Смена папки в другом контексте обновляет handle');
+  assert(requests===1,'Восстановление и смена папки не вызывают скрытых запросов');
+});
 test('Восстановление незавершённой операции; таймаут', async () => {
   const s = StateStore.fresh('test');
   s.status = 'running';

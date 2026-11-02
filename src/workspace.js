@@ -71,6 +71,7 @@ async function tabs() {
   $('#chat-choice').hidden = available.length < 2;
 }
 async function render() {
+  await files.restore();
   $('#folder-name').textContent = files.mode === 'browser' ? 'Внутри браузера' : files.root?.name || 'Не выбрано';
   $('#folder').textContent = files.root ? 'Изменить' : 'Выбрать';
   $('#choose-folder').disabled = typeof showDirectoryPicker !== 'function';

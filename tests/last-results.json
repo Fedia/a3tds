@@ -1,8 +1,8 @@
 {
   "date": "2026-11-02",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 32,
+  "passed": 33,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -30,6 +30,10 @@
     },
     {
       "name": "IndexedDB и File API: восстановление, конфликт, отзыв разрешения",
+      "ok": true
+    },
+    {
+      "name": "Папка: живой handle сохраняется, доступ не запрашивается повторно, отзыв учитывается",
       "ok": true
     },
     {

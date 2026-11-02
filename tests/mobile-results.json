@@ -1,6 +1,6 @@
 {
   "date": "2026-11-02",
-  "version": "0.4.2",
+  "version": "0.4.4",
   "viewport": {
     "width": 390,
     "height": 844
@@ -36,6 +36,8 @@
     "controls always above composer; real settings tap hits toolbar despite hidden duplicate headers and recreated composer",
     "controller-confirmed tool history visible after actual Python completion",
     "history view updates running to ok/error without mutating raw reply",
-    "unaccepted reply geometry preserved for virtualizer completion controls"
+    "unaccepted reply geometry preserved for virtualizer completion controls",
+    "storage handle caching preserves OPFS execution with settings closed",
+    "settings refresh reads current storage revision without extra authorization"
   ]
 }

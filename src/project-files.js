@@ -4,11 +4,16 @@ import {
   hash
 } from './util.js';
 export class ProjectFiles {
-  constructor(store) {
+  constructor(store, preferences = chrome.storage.local) {
     this.store = store;
+    this.preferences = preferences;
   }
   async restore() {
-    const mode = (await chrome.storage.local.get('file-mode'))['file-mode'];
+    const preferences = await this.preferences.get(['file-mode', 'file-revision']);
+    const mode = preferences['file-mode'],
+      revision = preferences['file-revision'];
+    // Keep the live, authorized handle. Rehydrate only when the selection or grant changes.
+    if (this.root && this.mode === mode && this.revision === revision) return;
     this.mode = mode;
     if (mode === 'browser') {
       assert(navigator.storage?.getDirectory, 'Браузер не поддерживает внутреннее файловое хранилище');
@@ -16,12 +21,14 @@ export class ProjectFiles {
         create: true
       });
     } else this.root = await this.store.get('directory');
+    this.revision = revision;
   }
   async useBrowserStorage() {
-    if ((await chrome.storage.local.get('file-mode'))['file-mode'] !== 'browser') await this.store.put(
+    if ((await this.preferences.get('file-mode'))['file-mode'] !== 'browser') await this.store.put(
       'owned-files', {});
-    await chrome.storage.local.set({
-      'file-mode': 'browser'
+    await this.preferences.set({
+      'file-mode': 'browser',
+      'file-revision': crypto.randomUUID()
     });
     await this.restore();
   }
@@ -37,6 +44,7 @@ export class ProjectFiles {
       mode: 'readwrite',
       id: 'psy-agent-project'
     });
+    await this.requestAccess(candidate);
     try {
       const f = await (await candidate.getFileHandle('manifest.json')).getFile();
       const m = JSON.parse(await f.text());
@@ -45,22 +53,45 @@ export class ProjectFiles {
       if (e.name !== 'NotFoundError' && e.name !== 'SyntaxError') throw e;
     }
     const previous = await this.store.get('directory');
-    if (this.mode !== 'directory' || !previous || !await previous.isSameEntry(candidate)) await this.store
-      .put('owned-files', {});
+    const changed = this.mode !== 'directory' || !previous || !await previous.isSameEntry(candidate);
+    await this.store.putMany([
+      ['directory', candidate], ...(changed ? [
+        ['owned-files', {}]
+      ] : [])
+    ]);
     this.mode = 'directory';
-    await chrome.storage.local.set({
-      'file-mode': 'directory'
-    });
     this.root = candidate;
-    await this.store.put('directory', this.root);
-    await this.authorize();
+    this.revision = crypto.randomUUID();
+    await this.preferences.set({
+      'file-mode': 'directory',
+      'file-revision': this.revision
+    });
   }
-  async authorize() {
-    assert(this.root, 'Выберите папку или внутреннее хранилище');
-    if (this.mode === 'browser') return;
-    assert(await this.root.requestPermission({
+  async requestAccess(root) {
+    if (await root.queryPermission({
+        mode: 'readwrite'
+      }) === 'granted') return false;
+    assert(await root.requestPermission({
       mode: 'readwrite'
     }) === 'granted', 'Нет разрешения на папку');
+    return true;
+  }
+  authorize() {
+    if (!this.authorizing) this.authorizing = this.authorizeSelected().finally(() => {
+      this.authorizing = null;
+    });
+    return this.authorizing;
+  }
+  async authorizeSelected() {
+    assert(this.root, 'Выберите папку или внутреннее хранилище');
+    if (this.mode === 'browser') return;
+    if (!await this.requestAccess(this.root)) return;
+    // Other extension contexts must refresh their handle after an explicit grant.
+    await this.store.put('directory', this.root);
+    this.revision = crypto.randomUUID();
+    await this.preferences.set({
+      'file-revision': this.revision
+    });
   }
   async permission() {
     if (this.mode === 'browser') {
