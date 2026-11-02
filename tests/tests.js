@@ -722,7 +722,7 @@ test('DeepSeek: общий таймаут, видимые фазы, прокру
   adapter.inspect=async()=>({status:'ready',answer:'old',count:1,completion:true});
   adapter.dom=async action=>{assert(action==='reveal-latest','Нельзя повторять отправку');nudges++;};
   let code;try{await adapter.waitAnswer({answer:'old',count:1})}catch(e){code=e.code}
-  assert(code==='RESPONSE_IDLE' && nudges>0 && phases.includes('waiting-response'),'Пустое ожидание ограничено, виртуальный список раскрыт');
+  assert(code==='RESPONSE_IDLE' && nudges===1 && phases.includes('waiting-response'),'Пустое ожидание ограничено, виртуальный список раскрыт');
   adapter.inspect=async()=>({status:'generating',answer:'partial',count:2});
   try{await adapter.waitAnswer({answer:'old',count:1,deadline:Date.now()+10})}catch(e){code=e.code}
   assert(code==='RESPONSE_TIMEOUT' && phases.includes('generating'),'Генерация имеет общий конечный бюджет');

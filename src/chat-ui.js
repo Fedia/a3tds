@@ -15,6 +15,8 @@
     belongsToChat,
     pythonHistoryEntry
   } = await import(chrome.runtime.getURL('src/ui-state.js'));
+  const { mountChatScroll } = await import(chrome.runtime.getURL('src/chat-scroll.js'));
+  const scroll = mountChatScroll();
   let enabled = false,
     busy = false,
     config = {},
@@ -88,7 +90,8 @@
   const view = () => mountFinalAnswers(() => deepseekDOM('answer-elements', config), {
     getFinals: acceptedFinals,
     getHistory: () => histories.filter(item => item.chatURL === location.href).flatMap(item => item.entries.map(entry => pythonHistoryEntry(entry, pythonViews[item.taskId]?.[entry.commandId]))),
-    color: nativeColor
+    color: nativeColor,
+    preserveScroll: work => scroll.guard.preserve(work)
   });
   let unmountView = () => {};
 

@@ -5,7 +5,8 @@ import {
 export function mountFinalAnswers(getAnswers, {
   getFinals = () => [],
   getHistory = () => [],
-  color = () => getComputedStyle(document.body).color
+  color = () => getComputedStyle(document.body).color,
+  preserveScroll = work => work()
 } = {}) {
   const rendered = new Map();
   let timer;
@@ -19,7 +20,7 @@ export function mountFinalAnswers(getAnswers, {
     }
     if (entry.copy && entry.copyHandler) entry.copy.removeEventListener('click', entry.copyHandler, true);
   };
-  const render = () => {
+  const render = () => preserveScroll(() => {
     const finals = getFinals(),
       history = getHistory();
     for (const [source, entry] of rendered) {
@@ -68,52 +69,94 @@ export function mountFinalAnswers(getAnswers, {
           }
         }
       }
-      const signature = JSON.stringify([raw, complete, text, final, step?.status, color()]);
+      const ink = color();
+      const signature = JSON.stringify([raw, complete, text, final, step?.status, ink]);
       const previous = rendered.get(source);
       if (previous?.signature === signature) continue;
-      if (previous) restore(previous);
-      rendered.delete(source);
-      if (!recognized) continue;
-      const entry = {
-        signature,
-        hidden: []
-      };
-      const target = step?.hidden ? answer.turn || source : source;
-      // Never collapse a live or unaccepted reply: virtualizers may unmount its
-      // completion toolbar before the adapter has observed it. Keep its geometry.
-      const conceal = !answer.context && !text && !step ? 'opacity:0!important;pointer-events:none!important' : collapsed;
-      // Keep DOM text and boxes available to the adapter while collapsing the visible turn.
-      entry.hidden.push({
-        node: target,
-        style: target.style.cssText,
-        aria: target.getAttribute('aria-hidden')
-      });
-      target.style.cssText += ';' + conceal;
-      target.setAttribute('aria-hidden', 'true');
+      if (!recognized) {
+        if (previous) restore(previous);
+        rendered.delete(source);
+        continue;
+      }
+      const target = step?.hidden || answer.context && !text ? answer.turn || source : source;
+      // Keep a not-yet-accepted reply measurable until the adapter reads completion.
+      const pending = !answer.context && !text && !step;
+      const conceal = pending ? 'opacity:0!important;pointer-events:none!important' : collapsed;
+      let entry = previous;
+      if (entry && (entry.target !== target || entry.pending !== pending)) {
+        restore(entry);
+        entry = null;
+      }
+      if (!entry) {
+        entry = {
+          hidden: [],
+          target,
+          pending
+        };
+        const change = (node, css, hidden = false) => {
+          entry.hidden.push({
+            node,
+            style: node.style.cssText,
+            aria: node.getAttribute('aria-hidden')
+          });
+          node.style.cssText += ';' + css;
+          if (hidden) node.setAttribute('aria-hidden', 'true');
+        };
+        change(target, conceal, true);
+        if (!pending && answer.turn && answer.turn !== target && answer.turn.contains(source)) {
+          // Native message wrappers may reserve the original prompt/code height.
+          // Compact only this known message, never the virtual list's spacer or transform.
+          let node = source.parentElement;
+          while (node && answer.turn.contains(node)) {
+            change(node, 'min-height:0!important;height:auto!important;max-height:none!important;flex-grow:0!important');
+            if (node === answer.turn) break;
+            node = node.parentElement;
+          }
+          if (answer.context) {
+            for (const sibling of answer.turn.children)
+              if (!sibling.contains(source)) change(sibling, collapsed, true);
+          }
+        }
+      }
+      entry.signature = signature;
+      entry.text = text;
+      if (!text && entry.card) {
+        entry.card.remove();
+        entry.card = null;
+      }
       if (text) {
-        const card = document.createElement('div');
-        card.className = final ? 'psy-agent-final' : step ? 'psy-agent-step' : 'psy-agent-task';
-        if (step) card.dataset.status = step.status;
-        card.style.cssText = `display:block;color:${color()};font:inherit;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:0;border:0;background:transparent`;
-        const content = document.createElement('div');
-        content.textContent = text;
-        card.append(content);
-        source.after(card);
-        entry.card = card;
-        if ((final || step) && answer.copy) {
+        if (!entry.card) {
+          const card = document.createElement('div');
+          const content = document.createElement('div');
+          card.append(content);
+          source.after(card);
+          entry.card = card;
+          entry.css = null;
+        }
+        const card = entry.card;
+        const className = final ? 'psy-agent-final' : step ? 'psy-agent-step' : 'psy-agent-task';
+        if (card.className !== className) card.className = className;
+        if (step && card.dataset.status !== step.status) card.dataset.status = step.status;
+        const css = `display:block;color:${ink};font:inherit;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:0;border:0;background:transparent`;
+        if (entry.css !== css) {
+          card.style.cssText = css;
+          entry.css = css;
+        }
+        if (card.firstChild.textContent !== text) card.firstChild.textContent = text;
+        if ((final || step) && answer.copy && !entry.copyHandler) {
           entry.copy = answer.copy;
           entry.copyHandler = event => {
             if (!event.isTrusted) return;
             event.preventDefault();
             event.stopImmediatePropagation();
-            navigator.clipboard?.writeText(text).catch(() => {});
+            navigator.clipboard?.writeText(entry.text).catch(() => {});
           };
           entry.copy.addEventListener('click', entry.copyHandler, true);
         }
       }
       rendered.set(source, entry);
     }
-  };
+  });
   const observer = new MutationObserver(() => {
     if (timer) return;
     timer = setTimeout(() => {

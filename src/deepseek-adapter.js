@@ -190,7 +190,8 @@ export class DeepSeekAdapter {
     let stable = 0,
       last = '',
       lastChange = Date.now(),
-      lastNudge = Date.now();
+      lastNudge = Date.now(),
+      nudged = false;
     const started = Date.now(),
       deadline = before.deadline || started + this.waitMs;
     while (Date.now() < deadline) {
@@ -214,8 +215,9 @@ export class DeepSeekAdapter {
         return s.answer;
       }
       // A virtualized latest reply may be outside the mounted DOM. Reveal it, never resend.
-      if (s.status === 'ready' && Date.now() - lastChange >= this.nudgeMs && Date.now() - lastNudge >= this.nudgeMs) {
-        await this.dom('reveal-latest');
+      if (!nudged && s.status === 'ready' && Date.now() - lastChange >= this.nudgeMs && Date.now() - lastNudge >= this.nudgeMs) {
+        const reveal = await this.dom('reveal-latest');
+        nudged = reveal?.reason !== 'reading-history';
         lastNudge = Date.now();
       }
       if (s.status === 'ready' && Date.now() - lastChange >= this.idleMs) {
