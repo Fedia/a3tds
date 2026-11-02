@@ -1,8 +1,8 @@
 {
   "date": "2026-11-02",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 26,
+  "passed": 27,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -34,6 +34,10 @@
     },
     {
       "name": "Совместимый режим: snapshot, касание/клик, ввод и устаревшие ссылки без CDP",
+      "ok": true
+    },
+    {
+      "name": "Переиспользование: переход в той же вкладке, newTab, передача новой задаче и защита посторонних",
       "ok": true
     },
     {

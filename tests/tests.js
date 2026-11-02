@@ -216,6 +216,38 @@ test('Совместимый режим: snapshot, касание/клик, вв
     await chrome.tabs.remove(tab.tabId);
   }
 });
+test('Переиспользование: переход в той же вкладке, newTab, передача новой задаче и защита посторонних', async () => {
+  const b=new BrowserTools({tabs:[]},async()=>{},async()=>{});
+  const rawOpen=b.open.bind(b);b.open=(url,options={})=>rawOpen(url,{...options,fixture:true});
+  const cc=new AgentController({store,files,browser:b,model:{},python:{}});await cc.create('reuse tabs');
+  const created=new Set();
+  try {
+    const first=await cc.execute(command('reuse-first','browser.open',{url:chrome.runtime.getURL('fixtures/article.html')}));created.add(first.tabId);
+    const second=await cc.execute(command('reuse-second','browser.open',{url:chrome.runtime.getURL('fixtures/page2.html')}));
+    assert(second.tabId===first.tabId&&second.reused&&b.state.tabs.length===1,'Обычное открытие переиспользует вкладку');
+    assert(second.page.title==='Страница 2'&&(await files.read(first.page.savedPath)).text.includes('Социальная поддержка'),'Старая страница сохранена, новая прочитана');
+    const repeat=await cc.execute(command('reuse-repeat','browser.open',{url:chrome.runtime.getURL('fixtures/page2.html')}));
+    assert(!repeat.navigated&&repeat.tabId===first.tabId,'Совпавший URL не перезагружается');
+    const extra=await cc.execute(command('reuse-extra','browser.open',{url:chrome.runtime.getURL('fixtures/article.html'),newTab:true}));created.add(extra.tabId);
+    assert(extra.tabId!==first.tabId&&b.state.tabs.length===2,'Явная отдельная вкладка поддерживается');
+    const known=await cc.execute(command('reuse-known','browser.open',{url:chrome.runtime.getURL('fixtures/page2.html')}));
+    assert(known.tabId===first.tabId&&!known.navigated&&(await chrome.tabs.get(extra.tabId)).url.endsWith('/article.html'),'Уже открытый URL выбирается среди рабочих вкладок');
+    const oldId=cc.s.id;await cc.create('next task');
+    const next=await cc.execute(command('reuse-next','browser.open',{url:chrome.runtime.getURL('fixtures/page2.html')}));
+    assert(cc.s.id!==oldId&&next.tabId===first.tabId&&next.reused,'Новая задача перенимает подтверждённую рабочую вкладку');
+    const outsider=await chrome.tabs.create({url:chrome.runtime.getURL('fixtures/article.html'),active:false});created.add(outsider.id);
+    cc.s.tabs.push({id:outsider.id,url:outsider.url});cc.s.workTabId=outsider.id;
+    const safe=await cc.execute(command('reuse-safe','browser.open',{url:chrome.runtime.getURL('fixtures/page2.html')}));
+    assert(safe.tabId!==outsider.id,'Посторонняя вкладка без маркера собственности не используется');
+    cc.s.modelTabId=safe.tabId;await fail(()=>b.check(safe.tabId));
+    assert((await chrome.tabs.get(outsider.id)).url.endsWith('/fixtures/article.html'),'Посторонняя вкладка не изменена');
+    delete cc.s.modelTabId;
+    const actual=await chrome.tabs.get(safe.tabId);
+    b.save=async()=>{if(cc.s.tabs.some(t=>t.navigation?.phase==='prepared'))b.cancel();};
+    await fail(()=>b.open(chrome.runtime.getURL('fixtures/records.html'),{fixture:true,commandId:'stop-before-navigation'}));
+    assert((await chrome.tabs.get(safe.tabId)).url===actual.url,'Остановка до dispatch не запускает переход');
+  } finally {await b.detach();for(const id of created)await chrome.tabs.remove(id);}
+});
 test('Готовность страницы: отложенный текст, визуальная стабилизация, часы и отмена', async () => {
   const state = { id: 'readiness-test', tabs: [] };
   const tools = new BrowserTools(state, async () => {}, async () => {});
@@ -517,6 +549,9 @@ test('Восстановление вкладки по commandId; неизвес
   await cc.recoverPending();assert(cc.s.last.status==='ok' && cc.s.last.data.tabId===7, 'Открытая вкладка повторно не создаётся');
   cc.s.pending={command:command('click','browser.click',{tabId:7,snapshot:'old',element:'e0'})};
   await cc.recoverPending();assert(cc.s.last.status==='error' && cc.s.blockedInteractions.includes(7) && !cc.s.pending, 'Ошибка одного взаимодействия не блокирует чтение и цикл');
+  cc.s.tabs[0].commandId='unconfirmed-nav';cc.s.tabs[0].navigation={url:'https://wanted.example/',phase:'dispatching'};
+  cc.s.pending={command:command('unconfirmed-nav','browser.open',{url:'https://wanted.example/'})};
+  await cc.recoverPending();assert(cc.s.last.status==='error','Старую страницу нельзя выдать за результат непроверенного перехода');
 });
 test('Ошибка Python возвращается модели; следующий шаг выполняется без ручного восстановления', async () => {
   let calls=0, runs=0;
@@ -554,6 +589,8 @@ test('Планы и входные файлы: валидация, запрет 
     await fail(()=>parseCommand(JSON.stringify(command('bad','browser.collect',{tabId:1,inspection:'i',plan}))));
   }
   await fail(()=>parseCommand(JSON.stringify(command('bad','python.run',{code:'pass',data:{},files:[{path:'../secret',name:'a'}]}))));
+  parseCommand(JSON.stringify(command('open-new','browser.open',{url:'https://example.org/',newTab:true})));
+  await fail(()=>parseCommand(JSON.stringify(command('bad-new','browser.open',{url:'https://example.org/',newTab:'yes'}))));
   parseCommand(JSON.stringify(command('old','python.run',{code:'result=1',data:{}})));
   parseCommand(JSON.stringify(command('new','python.run',{code:'result=1',data:{},files:[{path:'data.csv',name:'data.csv'}]})));
 });
@@ -592,7 +629,7 @@ test('Страницы → план → сохранённые файлы → о
     const old=cc.s.id;await cc.create('Новая задача');
     assert(old!==cc.s.id&&paths.every(p=>p.includes(old)),'Файлы задач разделены');
     for(const path of paths)assert((await files.file(path)).size>0,'Предыдущие результаты остались в папке');
-  } finally { await b.detach();for(const id of tabs)await chrome.tabs.remove(id); }
+  } finally { await b.detach();for(const id of new Set(tabs))await chrome.tabs.remove(id); }
 });
 test('Сбой экспорта: журнал сохраняет данные, повторный запуск выгружает файл без дубликатов', async () => {
   const cc=new AgentController({store,files,browser:{detach:async()=>{}},model:{cancel(){}},python:{cancel(){}}});

@@ -78,6 +78,16 @@ export async function recoverTool(controller, command, message = 'Выполне
       const tab = state.tabs.find(t => t.commandId === command.id);
       if (tab) {
         const checked = await browser.check(tab.id);
+        const nav = tab.navigation;
+        const current = checked.pendingUrl || checked.url;
+        if (nav && current !== (nav.observedURL || nav.url) && checked.pendingUrl !== nav.url) {
+          result.data = {
+            tabId: tab.id,
+            url: current,
+            requestedURL: nav.url
+          };
+          return result;
+        }
         let page = null;
         try {
           page = await browser.run(tab.id, 'snapshot');

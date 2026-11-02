@@ -90,6 +90,9 @@ export const TOOLS = {
   }
 };
 const OPTIONAL = {
+  'browser.open': {
+    newTab: v => typeof v === 'boolean'
+  },
   'python.run': {
     files: Array.isArray
   },

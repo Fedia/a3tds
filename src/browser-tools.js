@@ -215,10 +215,11 @@ export class BrowserTools {
       }
     });
   }
-  async check(id) {
-    assert(this.state.tabs.some(t => t.id === id), 'Вкладка не принадлежит задаче');
+  async check(id, state = this.state) {
+    assert(id !== state.modelTabId, 'Вкладка DeepSeek исключена из рабочих вкладок');
+    assert(state.tabs.some(t => t.id === id), 'Вкладка не принадлежит задаче');
     const ownership = await chrome.storage.session.get('owned-tab-' + id);
-    assert(ownership['owned-tab-' + id] === this.state.id,
+    assert(ownership['owned-tab-' + id] === state.id,
       'Вкладка не подтверждена в текущем сеансе браузера. Сбросьте старые вкладки и откройте новые.');
     const t = await chrome.tabs.get(id);
     const fixture = url => url?.startsWith(chrome.runtime.getURL('fixtures/'));
@@ -237,6 +238,28 @@ export class BrowserTools {
       } catch {}
     }
     this.state.tabs = valid;
+  }
+  async adoptTabs(previous) {
+    if (!previous?.id) return;
+    const blocked = new Set(previous.blockedInteractions || []);
+    if (previous.pending?.command.args?.tabId) blocked.add(previous.pending.command.args.tabId);
+    for (const entry of previous.tabs || []) {
+      if (entry.id === previous.modelTabId || blocked.has(entry.id) ||
+        previous.pending?.command.id && entry.commandId === previous.pending.command.id) continue;
+      try {
+        const ownership = await chrome.storage.session.get('owned-tab-' + entry.id);
+        if (ownership['owned-tab-' + entry.id] !== previous.id) continue;
+        const tab = await this.check(entry.id, previous);
+        await chrome.storage.session.set({
+          ['owned-tab-' + entry.id]: this.state.id
+        });
+        this.state.tabs.push({
+          id: entry.id,
+          url: tab.pendingUrl || tab.url
+        });
+      } catch {}
+    }
+    this.state.workTabId = this.state.tabs.find(t => t.id === previous.workTabId)?.id || this.state.tabs.at(-1)?.id;
   }
   async attach(id) {
     await this.check(id);
@@ -266,7 +289,20 @@ export class BrowserTools {
   }
   async waitForPage(id, options = {}) {
     const generation = this.generation;
-    return waitForStablePage(() => this.runOnce(id, 'readiness'), {
+    return waitForStablePage(async () => {
+      const sample = await this.runOnce(id, 'readiness');
+      const nav = this.state.tabs.find(t => t.id === id)?.navigation;
+      const oldDocument = nav && (nav.fromDocumentId != null ? nav.fromDocumentId === sample.documentId : nav.fromURL === sample.url);
+      if (nav && nav.phase !== 'observed' && oldDocument && sample.url !== nav.url) {
+        return {
+          ...sample,
+          domReady: false,
+          contentPresent: false,
+          navigationPending: true
+        };
+      }
+      return sample;
+    }, {
       ...options,
       cancelled: () => generation !== this.generation || this.interrupted
     });
@@ -338,13 +374,80 @@ export class BrowserTools {
   }
   async open(url, {
     fixture = false,
-    commandId
+    commandId,
+    newTab = false
   } = {}) {
-    assert(this.state.tabs.length < 5, 'Лимит пяти рабочих страниц');
-    if (!fixture) {
-      safeURL(url);
-
+    const generation = this.generation;
+    const active = () => {
+      if (generation !== this.generation || this.interrupted) {
+        const error = new Error('Открытие страницы остановлено'); error.definite = true; throw error;
+      }
+    };
+    url = fixture ? new URL(url).href : safeURL(url);
+    await this.recoverTabs();
+    active();
+    if (!newTab && this.state.tabs.length) {
+      let entry = this.state.tabs.find(t => t.id === this.state.workTabId) || this.state.tabs.at(-1);
+      for (const candidate of this.state.tabs) {
+        const current = await this.check(candidate.id);
+        if ((current.pendingUrl || current.url) === url) { entry = candidate; break; }
+      }
+      const tab = await this.check(entry.id);
+      active();
+      const current = tab.pendingUrl || tab.url;
+      entry.commandId = commandId;
+      this.state.workTabId = entry.id;
+      if (current === url) {
+        if (!tab.pendingUrl || entry.navigation?.url !== url) entry.navigation = {
+          commandId,
+          url,
+          phase: 'observed'
+        };
+        else entry.navigation.commandId = commandId;
+        await this.save();
+        return {
+          tabId: entry.id,
+          url,
+          requestedURL: url,
+          reused: true,
+          navigated: false
+        };
+      }
+      let before = null;
+      try {
+        before = await this.runOnce(entry.id, 'readiness');
+      } catch {}
+      entry.navigation = {
+        commandId,
+        url,
+        fromURL: tab.url,
+        fromDocumentId: before?.documentId,
+        phase: 'prepared'
+      };
+      await this.save();
+      entry.navigation.phase = 'dispatching';
+      await this.save(); // Persist before navigating; never replay an uncertain navigation.
+      active();
+      await chrome.tabs.update(entry.id, {
+        url
+      });
+      entry.url = url;
+      entry.navigation.phase = 'dispatched';
+      await this.save();
+      return {
+        tabId: entry.id,
+        url,
+        requestedURL: url,
+        reused: true,
+        navigated: true
+      };
     }
+    if (this.state.tabs.length >= 5) {
+      const error = new Error('Уже открыты пять рабочих вкладок. Используй browser.open без newTab.');
+      error.definite = true;
+      throw error;
+    }
+    active();
     const tab = await chrome.tabs.create({
       url,
       active: false
@@ -357,20 +460,32 @@ export class BrowserTools {
       url,
       commandId
     });
+    this.state.workTabId = tab.id;
     await this.save();
     return {
       tabId: tab.id,
-      url: tab.pendingUrl || tab.url || url
+      url: tab.pendingUrl || tab.url || url,
+      requestedURL: url,
+      reused: false,
+      navigated: true
     };
-
   }
   async execute(tool, a, context = {}) {
     const op = tool.split('.')[1];
     if (op === 'collect') validateExtractionPlan(a.plan);
     if (op === 'open') {
-      const opened = await this.open(a.url, context);
+      const opened = await this.open(a.url, {
+        ...context,
+        newTab: a.newTab === true
+      });
       try {
         const page = await this.run(opened.tabId, 'snapshot');
+        const entry = this.state.tabs.find(t => t.id === opened.tabId);
+        if (entry?.navigation && page.readiness?.ready) {
+          entry.navigation.phase = 'observed';
+          entry.navigation.observedURL = page.url;
+          await this.save();
+        }
         return {
           ...opened,
           url: page.url || opened.url,

@@ -10,9 +10,17 @@ BASE=f'http://127.0.0.1:{server.server_port}/'
 async def main():
  async with async_playwright() as p:
   b=await p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN') or shutil.which('chromium'),args=['--no-sandbox'])
-  context=await b.new_context();host=await context.new_page();tabs={};cdp={};storage={}
+  context=await b.new_context();host=await context.new_page();tabs={};cdp={};storage={};pending={};next_id=[2]
   async def bridge(source,op,arg):
-   if op=='get':return {'id':arg,'url':tabs[arg].url}
+   if op=='get':return {'id':arg,'url':tabs[arg].url,**({'pendingUrl':pending[arg]} if arg in pending else {})}
+   if op=='storage-set':storage.update(arg);return None
+   if op=='create':
+    n=next_id[0];next_id[0]+=1;tabs[n]=await context.new_page();await tabs[n].goto(arg['url']);return {'id':n,'url':tabs[n].url}
+   if op=='update':
+    n=arg['id'];pending[n]=arg['options']['url']
+    async def navigate():
+     await asyncio.sleep(.3);await tabs[n].goto(pending[n],wait_until='domcontentloaded');pending.pop(n,None)
+    asyncio.create_task(navigate());return {'id':n,'url':tabs[n].url,'pendingUrl':pending[n]}
    if op=='storage':return {arg:storage.get(arg)}
    if op=='script':return [{'result':await tabs[arg['id']].evaluate('([fn,args])=>('+arg['fn']+')(...args)',[arg['fn'],arg['args']])}]
    if op=='attach':cdp[arg]=await context.new_cdp_session(tabs[arg]);return None
@@ -21,7 +29,7 @@ async def main():
    raise Exception(op)
   await host.expose_binding('bridge',bridge)
   await host.goto(BASE+'tests/index.html')
-  await host.evaluate('''() => { const evt={addListener(){}}; window.chrome={runtime:{getURL:p=>location.origin+'/'+p},tabs:{get:id=>bridge('get',id),onRemoved:evt},storage:{session:{get:k=>bridge('storage',k)}},scripting:{executeScript:a=>bridge('script',{id:a.target.tabId,fn:a.func.toString(),args:a.args})},debugger:{onDetach:evt,attach:a=>bridge('attach',a.tabId),sendCommand:(a,method,params)=>bridge('cdp',{id:a.tabId,method,params}),detach:a=>bridge('detach',a.tabId)}}; }''')
+  await host.evaluate('''() => { const evt={addListener(){}}; window.chrome={runtime:{getURL:p=>location.origin+'/'+p},tabs:{get:id=>bridge('get',id),create:a=>bridge('create',a),update:(id,options)=>bridge('update',{id,options}),onRemoved:evt},storage:{session:{get:k=>bridge('storage',k),set:v=>bridge('storage-set',v)}},scripting:{executeScript:a=>bridge('script',{id:a.target.tabId,fn:a.func.toString(),args:a.args})},debugger:{onDetach:evt,attach:a=>bridge('attach',a.tabId),sendCommand:(a,method,params)=>bridge('cdp',{id:a.tabId,method,params}),detach:a=>bridge('detach',a.tabId)}}; }''')
   for transport in ['scripting','auto']:
    target=await context.new_page();tabs[1]=target;storage['owned-tab-1']='ready-test'
    async def slow_image(route):
@@ -83,7 +91,18 @@ async def main():
    await target.goto(BASE+'fixtures/records-page2.html',wait_until='domcontentloaded')
    assert await host.evaluate("""async()=>{try{await tools.execute('browser.collect',{tabId:1,inspection:inspectToken,plan});return false}catch{return true}}""")
    print('PASS:',transport,'structured DOM plan, visible fields only, stale inspection after navigation rejected')
+   reused=await host.evaluate("""async()=>tools.execute('browser.open',{url:location.origin+'/fixtures/records.html'})""")
+   assert reused['reused'] and reused['tabId']==1 and reused['page']['title']=='Records fixture',reused
+   assert reused['page']['readiness']['ready'] and reused['page']['url'].endswith('/records.html')
+   unchanged=await host.evaluate("""async()=>tools.execute('browser.open',{url:location.origin+'/fixtures/records.html'})""")
+   assert not unchanged['navigated'] and unchanged['tabId']==1
+   separate=await host.evaluate("""async()=>tools.execute('browser.open',{url:location.origin+'/fixtures/records-page2.html',newTab:true})""")
+   assert separate['tabId']!=1 and not separate['reused']
+   print('PASS:',transport,'default reuse, delayed navigation commit, same URL without reload, explicit new tab')
    await host.evaluate('tools.detach()');await target.close()
+   for n,page in list(tabs.items()):
+    if n!=1 and not page.is_closed():await page.close()
+   tabs.clear()
    print('PASS:',transport,'DOMContentLoaded, delayed content/layout, clock exclusion, busy timeout, cancellation')
   await b.close()
 asyncio.run(main());server.shutdown()
