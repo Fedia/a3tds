@@ -31,7 +31,7 @@ jobs:
             node --check "$file"
           done < <(find src fixtures tests -type f -name '*.js' -print0)
 
-      - name: Verify sandbox resource access contract
+      - name: Verify private Python Worker and CSP contract
         run: python3 .github/scripts/test_manifest.py
 
       - name: Validate local dependencies and create ZIP
@@ -94,6 +94,8 @@ jobs:
           Исправлен manifest: HTML и загрузчик изолированной среды Python доступны для вложенного iframe. Проверка этих ресурсов добавлена в CI; сторонние сайты не могут отправлять задания sandbox.
 
           Добавлен micropip: установка дополнительных Python wheels из PyPI и совместимых сборок из CDN Pyodide, проверка SHA-256, верхнеуровневый await и прогресс загрузки. Ядро Python и JS остаются локальными.
+
+          Постоянная общая Python-сессия без sandbox iframe, короткий JSON и блоки python.run, ref для элементов. Начальная справка не повторяется на каждом шаге. Python работает в origin расширения; сохранённые результаты остаются после сброса.
 
           Это предварительная версия. Локальные проверки пройдены; Titanium на устройстве, авторизованный DeepSeek и установка на Windows/macOS требуют ручной приёмки. Подробности — в VALIDATION.md.
           NOTES

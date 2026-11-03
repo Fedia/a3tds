@@ -67,6 +67,7 @@ async function connect({
   const options = await chrome.storage.local.get(['chat-bindings', 'browser-mode', 'browser-auto-fallback']);
   await files.restore();
   await files.permission();
+  await python.bindScope((await chrome.tabs.get(tabId)).url, files.root);
   const state = await model.connect(tabId, options['chat-bindings'] || {});
   assert(state.status === 'ready' || allowGenerating && state.status === 'generating', state.reason || 'Чат ещё не готов к отправке');
   return options;
@@ -207,7 +208,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         ok: true,
         data: {
           active: locks.held.some(l => l.name === 'psy-agent-execution'),
-          computing: !!python.worker || [...(python.jobs?.jobs.values() || [])].some(job => job.record.status === 'running' || job.exporting),
+          computing: !!python.running || [...(python.jobs?.jobs.values() || [])].some(job => job.record.status === 'running' || job.exporting),
           capabilities: capabilities(),
           status: saved?.status,
           reason: saved?.reason,
@@ -217,7 +218,8 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       return;
     }
     if (message.command === 'cancel-python-only') {
-      if (python.jobs?.state.id === message.taskId) await python.jobs.cancelActive('Начата задача в другом чате');
+      if (python.jobs) await python.jobs.cancelActive('Начата задача в другом чате');
+      python.reset('Начата задача в другом чате');
       respond({
         ok: true
       });
@@ -226,7 +228,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (message.command === 'chat-stop') {
       agentEnabled = false;
       cancellation++;
-      if (controller && (handling || controller.running || python.worker || [...(python.jobs?.jobs.values() || [])].some(job => job.record.status === 'running'))) await controller.stop();
+      if (controller && (handling || controller.running || python.running || [...(python.jobs?.jobs.values() || [])].some(job => job.record.status === 'running'))) await controller.stop();
       respond({
         ok: true
       });
@@ -262,6 +264,12 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     error: e.message
   }));
   return true;
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && (changes['file-mode'] || changes['file-revision'])) void files.restore().then(() => python.bindScope(model.config ? controller?.s?.modelChatURL || python.chatURL : python.chatURL, files.root)).catch(() => python.reset('Изменено хранилище'));
+});
+chrome.tabs.onUpdated?.addListener((id, change) => {
+  if (id === tabId && change.url) void python.bindScope(change.url, files.root);
 });
 window.addEventListener('pagehide', () => {
   model.cancel();

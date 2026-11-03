@@ -66,6 +66,15 @@ export async function recoverTool(controller, command, message = 'Выполне
           recovered: true
         }
       };
+    } else if (command.tool === 'python.reset' && !python.worker) {
+      return {
+        id: command.id,
+        status: 'ok',
+        data: {
+          status: 'reset',
+          recovered: true
+        }
+      };
     } else if (command.tool === 'files.write') {
       const write = await store.get('write:' + operationKey(state, command));
       if (write) {

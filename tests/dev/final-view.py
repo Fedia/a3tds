@@ -5,8 +5,9 @@ from playwright.async_api import async_playwright
 ROOT = Path(__file__).resolve().parents[2]
 path = Path(sys.argv[1]) if len(sys.argv)>1 else ROOT/'fixtures/deepseek-observed.html'
 html = re.sub(r'<script\b[^>]*>.*?</script>', '', path.read_text(), flags=re.I|re.S)
-source = '\n'.join((ROOT/'src'/name).read_text().replace('export function', 'function') for name in ['ui-state.js','chat-dom.js','final-view.js'])
+source = '\n'.join((ROOT/'src'/name).read_text().replace('export function', 'function') for name in ['tool-format.js','ui-state.js','chat-dom.js','final-view.js'])
 source = re.sub(r"import\s*\{\s*commandUIKey\s*\}\s*from './ui-state.js';\n", '', source)
+source = re.sub(r"import\s*\{[^}]*\}\s*from './tool-format.js';\n", '', source)
 async def main():
  async with async_playwright() as p:
   browser=await p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN') or shutil.which('chromium'),args=['--no-sandbox'])

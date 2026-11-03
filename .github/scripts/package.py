@@ -26,7 +26,7 @@ def package():
     validate_manifest(ROOT, manifest)
     for relative in [
         manifest["background"]["service_worker"],
-        *manifest["sandbox"]["pages"],
+        *manifest.get("sandbox", {}).get("pages", []),
         "workspace.html", "executor.html", "src/executor.js", "src/chat-ui.js", "src/python-worker.js",
     ]:
         local_file(relative)

@@ -11,6 +11,7 @@ async def main():
   await page.route('**/executor.html',lambda route:route.fulfill(status=200,body='<html></html>',content_type='text/html'))
   await page.goto(f'http://127.0.0.1:{server.server_port}/fixtures/chat.html')
   await page.evaluate("() => {const meta=document.createElement('meta');meta.name='viewport';meta.content='width=device-width, initial-scale=1';document.head.append(meta);document.body.style.paddingTop='240px'}");await page.add_script_tag(url='/src/chat-ui.js');await page.wait_for_timeout(100)
+  await page.wait_for_function("()=>window.testShadow?.host.isConnected && typeof testShadow.querySelector('input')?.onchange==='function'")
   await page.evaluate("window.bindings = {}; testShadow.querySelector('input').click()")
   await page.locator('#composer').fill('Моя задача');await page.locator('#send').tap();await page.wait_for_timeout(100)
   assert await page.evaluate("messages.filter(m=>m.type==='chat-task').length") == 1

@@ -1,8 +1,8 @@
 {
-  "date": "2026-11-02",
-  "version": "0.6.1",
+  "date": "2026-11-03",
+  "version": "0.7.0",
   "environment": "Chromium 154 Linux; HTTP fixtures and emulated Chrome API transport; actual CDP, Worker and Pyodide",
-  "passed": 38,
+  "passed": 42,
   "failed": 0,
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
@@ -18,6 +18,10 @@
     },
     {
       "name": "JSON: корректная команда, запрет лишних полей и инструментов",
+      "ok": true
+    },
+    {
+      "name": "Короткие команды и Python-блоки: валидация, defaults, обычный Markdown не выполняется",
       "ok": true
     },
     {
@@ -65,7 +69,7 @@
       "ok": true
     },
     {
-      "name": "Pyodide: pandas, статистика, matplotlib, файл и изоляция",
+      "name": "Pyodide: pandas, статистика, matplotlib, файл и Worker без DOM",
       "ok": true
     },
     {
@@ -85,6 +89,10 @@
       "ok": true
     },
     {
+      "name": "Python jobs: общая сессия между задачами, сброс и статус без повторных записей больших результатов",
+      "ok": true
+    },
+    {
       "name": "Python jobs: отмена, запрет преждевременного finish и восстановление потерянного Worker",
       "ok": true
     },
@@ -93,7 +101,15 @@
       "ok": true
     },
     {
+      "name": "Python jobs: запоздалая запись прогресса не теряет готовый результат",
+      "ok": true
+    },
+    {
       "name": "Сквозной цикл с тестовой моделью: корпус → Python → CSV/отчёт; duplicate guard",
+      "ok": true
+    },
+    {
+      "name": "Новый протокол: bootstrap один раз, автоматические id, два одинаковых запроса и восстановление без повтора",
       "ok": true
     },
     {

@@ -1,4 +1,8 @@
 import {
+  decodeToolResponse,
+  responseUIKey
+} from './tool-format.js';
+import {
   commandUIKey
 } from './ui-state.js';
 /** Render readable tasks, execution receipts and final answers while preserving adapter DOM. */
@@ -45,13 +49,15 @@ export function mountFinalAnswers(getAnswers, {
         const clean = raw.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
         let command;
         try {
-          command = JSON.parse(clean);
+          command = decodeToolResponse(raw);
         } catch {}
         recognized = command && typeof command.tool === 'string' &&
-          /^(browser\.(open|snapshot|inspect|collect|click|type|scroll|extract)|files\.(list|read|write)|python\.(run|status|cancel)|task\.finish)$/.test(command.tool) ||
+          /^(browser\.(open|snapshot|inspect|collect|click|type|scroll|extract)|files\.(list|read|write)|python\.(run|status|cancel|reset)|task\.finish)$/.test(command.tool) ||
           /^\{\s*"(?:id|tool|description|args)"\s*:/.test(clean);
         if (recognized && command) {
-          step = history.findLast(item => item.key === commandUIKey(command));
+          const wireKey = responseUIKey(raw);
+          const candidates = history.filter(item => item.responseKey === wireKey && (!item.messageKey || item.messageKey === answer.messageKey));
+          step = (command.id && history.findLast(item => item.key === commandUIKey(command))) || (candidates.length === 1 ? candidates[0] : null);
           if (step && !step.hidden) text = step.description + '\n' + ({
               running: 'Выполняется…',
               ok: 'Готово',
@@ -62,7 +68,7 @@ export function mountFinalAnswers(getAnswers, {
             (step.detail ? ' · ' + step.detail : '');
         }
         if (complete && command?.tool === 'task.finish' && typeof command.args?.summary === 'string') {
-          const accepted = finals.find(item => item.commandId === command.id && item.text === command.args.summary);
+          const accepted = finals.find(item => ((item.responseKey === responseUIKey(raw) && (!item.messageKey || item.messageKey === answer.messageKey)) || command.id && item.commandId === command.id) && item.text === command.args.summary);
           if (accepted) {
             final = true;
             text = accepted.text;
@@ -157,25 +163,37 @@ export function mountFinalAnswers(getAnswers, {
       rendered.set(source, entry);
     }
   });
-  const observer = new MutationObserver(() => {
+  const observer = new MutationObserver(records => {
+    if (records.every(record => (record.target.nodeType === 1 ? record.target : record.target.parentElement)?.closest('.psy-agent-step,.psy-agent-final,.psy-agent-task'))) return;
     if (timer) return;
     timer = setTimeout(() => {
       timer = null;
       render();
     }, 50);
   });
-  observer.observe(document.body, {
-    subtree: true,
-    childList: true,
-    characterData: true,
-    attributes: true
-  });
+  let observedRoot;
+  const watch = () => {
+    const root = document.querySelector('.ds-virtual-list,[role=log],main') || document.body;
+    if (root === observedRoot) return;
+    observer.disconnect();
+    observedRoot = root;
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true
+    });
+  };
+  watch();
   render();
   const cleanup = () => {
     observer.disconnect();
     clearTimeout(timer);
     for (const entry of rendered.values()) restore(entry);
   };
-  cleanup.refresh = render;
+  cleanup.refresh = () => {
+    watch();
+    render();
+  };
   return cleanup;
 }

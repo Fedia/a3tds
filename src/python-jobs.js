@@ -31,10 +31,33 @@ export class PythonJobs {
     }
   }
   async publish(job) {
-    await this.store.putPythonJob(pythonJobKey(job.record.taskId, job.record.jobId), job.record);
+    const key = pythonJobKey(job.record.taskId, job.record.jobId);
+    const snapshot = {
+        ...job.record
+      },
+      outcome = snapshot.outcome;
+    const markerRecord = JSON.stringify({
+      ...snapshot,
+      outcome: undefined
+    });
+    if (markerRecord === job.recordMarker) return;
+    await this.store.putPythonJob(key, snapshot);
+    if (outcome) {
+      snapshot.outcomeRef = key + ':output';
+      delete snapshot.outcome;
+      if (job.record.outcome === outcome) {
+        job.record.outcomeRef = snapshot.outcomeRef;
+        delete job.record.outcome;
+      }
+    }
+    // Never mark a newer in-memory update as persisted by an older transaction.
+    job.recordMarker = JSON.stringify({
+      ...snapshot,
+      outcome: undefined
+    });
     this.state.pythonJobs ??= {};
     this.state.pythonJobs[job.record.jobId] = this.view(job.record);
-    const marker = JSON.stringify([job.record.status, !!job.record.outcome, job.record.result?.savedPath, this.state.files.length]);
+    const marker = JSON.stringify([job.record.status, !!(job.record.outcome || job.record.outcomeRef), job.record.result?.savedPath, this.state.files.length]);
     if (marker !== job.patchMarker) {
       await this.store.patchPythonJob(this.state.id, job.record.jobId, this.state.pythonJobs[job.record.jobId], this.state.files);
       job.patchMarker = marker;
@@ -54,6 +77,9 @@ export class PythonJobs {
       codeSeconds: record.codeStarted ? Math.floor(((record.finished || now) - record.codeStarted) / 1000) : 0,
       secondsSinceEvent: Math.floor((now - record.updated) / 1000),
       progress: record.progress ?? null,
+      sessionId: record.sessionId,
+      sessionReused: record.sessionReused,
+      timings: record.timings,
       ...(record.result || {}),
       stdout: (record.stdout || '').slice(-4000),
       stderr: (record.stderr || '').slice(-2000),
@@ -62,7 +88,7 @@ export class PythonJobs {
       ...(record.error ? {
         error: record.error
       } : {}),
-      ...(record.outcome ? {
+      ...((record.outcome || record.outcomeRef) ? {
         exportPending: true,
         exportError: record.exportError || null
       } : {})
@@ -105,6 +131,8 @@ export class PythonJobs {
   async start(command, inputs) {
     const id = command.id;
     if (this.jobs.has(id) || await this.store.get(pythonJobKey(this.state.id, id))) return this.status(id, 0);
+    for (const job of this.jobs.values())
+      if (job.staging) await job.staging;
     assert(!await this.hasActive(), 'Python уже выполняется. Используй python.status или python.cancel для текущего jobId.');
     const record = {
       taskId: this.state.id,
@@ -141,9 +169,6 @@ export class PythonJobs {
       queueUpdate();
     };
     const execute = async () => {
-      job.heartbeat = setInterval(() => {
-        job.updates = job.updates.catch(() => {}).then(() => this.publish(job));
-      }, 5000);
       this.runtime.onProgress = update;
       this.runtime.onOutput = output => {
         record[output.stream] = output.text;
@@ -165,24 +190,47 @@ export class PythonJobs {
           }
           return run();
         }) : await run();
-        record.status = 'completed';
-        record.phase = 'completed';
-        record.finished = Date.now();
+        record.sessionId = outcome.sessionId;
+        record.sessionReused = outcome.sessionReused;
+        record.timings = outcome.timings;
+        record.phase = 'exporting';
         record.stdout = outcome.stdout;
         record.stderr = outcome.stderr;
         record.outcome = outcome;
+        clearTimeout(job.publishTimer);
+        job.publishTimer = null;
         job.staging = (async () => {
           await job.updates.catch(() => {});
+          const completed = {
+            ...record,
+            status: 'completed',
+            phase: 'completed',
+            finished: Date.now()
+          };
+          await this.store.putPythonJob(pythonJobKey(record.taskId, record.jobId), completed);
+          delete record.outcome;
+          Object.assign(record, {
+            status: 'completed',
+            phase: 'completed',
+            finished: completed.finished,
+            outcomeRef: pythonJobKey(record.taskId, record.jobId) + ':output'
+          });
           await this.publish(job);
         })();
-        await job.staging; // Output bytes survive a failed export or a reload.
+        await job.staging;
+        this.runtime.acknowledge?.(outcome.requestId);
         await this.export(job).catch(() => {});
       } catch (error) {
         record.status = job.cancelReason || /прерван|остановлен пользователем/i.test(error.message) ? 'cancelled' : 'failed';
         record.phase = error.pythonPhase || record.phase;
         record.finished = Date.now();
+        record.stdout = error.stdout || record.stdout;
+        record.stderr = error.stderr || record.stderr;
+        if (error.sessionId !== undefined) record.sessionId = error.sessionId;
+        if (error.sessionReused !== undefined) record.sessionReused = error.sessionReused;
+        if (error.timings !== undefined) record.timings = error.timings;
         record.error = {
-          code: error.code || 'PYTHON_FAILED',
+          code: record.outcome || record.outcomeRef ? 'PYTHON_PERSIST_FAILED' : typeof error.code === 'string' ? error.code : 'PYTHON_FAILED',
           message: job.cancelReason || error.message
         };
         await job.updates.catch(() => {});
@@ -190,7 +238,6 @@ export class PythonJobs {
       }
     };
     job.completion = execute().finally(() => {
-      clearInterval(job.heartbeat);
       clearTimeout(job.publishTimer);
     }).catch(async error => {
       record.status = 'failed';
@@ -220,8 +267,14 @@ export class PythonJobs {
   export (job) {
     if (!job.exporting) {
       const execute = async () => {
-        await job.staging;
-        job.record = await this.store.get(pythonJobKey(this.state.id, job.record.jobId)) || job.record;
+        try {
+          await job.staging;
+        } catch {
+          job.staging = null;
+          await this.publish(job);
+        }
+        const stored = await this.store.get(pythonJobKey(this.state.id, job.record.jobId));
+        if (!job.record.outcome && stored) job.record = stored;
         if (job.record.result?.savedPath)
           for (const path of [job.record.result.savedPath, ...(job.record.result.files || []).map(file => file.path)])
             if (!this.state.files.includes(path)) this.state.files.push(path);
@@ -235,7 +288,7 @@ export class PythonJobs {
   }
   async exportOutput(job) {
     const r = job.record,
-      outcome = r.outcome;
+      outcome = r.outcome || (r.outcomeRef && await this.store.get(r.outcomeRef));
     if (!outcome) return;
     try {
       const base = 'tasks/' + r.taskId,
@@ -261,7 +314,13 @@ export class PythonJobs {
       for (const path of [full.path, ...created.map(f => f.path)])
         if (!this.state.files.includes(path)) this.state.files.push(path);
       delete r.outcome;
+      delete r.outcomeRef;
       delete r.exportError;
+      if (r.error?.code === 'PYTHON_PERSIST_FAILED') {
+        r.status = 'completed';
+        r.phase = 'completed';
+        delete r.error;
+      }
       await this.publish(job);
     } catch (error) {
       r.exportError = error.message;
@@ -273,7 +332,7 @@ export class PythonJobs {
     const job = await this.get(id);
     if (!terminal(job.record.status) && waitMs > 0) await Promise.race([job.completion, sleep(Math.min(waitMs, 15000))]);
     await job.updates.catch(() => {});
-    if (job.record.outcome) await this.export(job).catch(() => {});
+    if (job.record.outcome || job.record.outcomeRef) await this.export(job).catch(() => {});
     await this.publish(job);
     return this.view(job.record);
   }
@@ -294,7 +353,7 @@ export class PythonJobs {
   async flushPending() {
     for (const key of await this.store.get('python-export-queue') || []) {
       const record = await this.store.get(key);
-      if (!record?.outcome) continue;
+      if (!record?.outcome && !record?.outcomeRef) continue;
       if (record.taskId === this.state.id) await this.export(await this.get(record.jobId));
       else {
         const archive = await this.store.get('archive-' + record.taskId) || {
@@ -316,6 +375,6 @@ export class PythonJobs {
   async flush() {
     await this.restore();
     for (const job of this.jobs.values())
-      if (job.record.outcome) await this.export(job);
+      if (job.record.outcome || job.record.outcomeRef) await this.export(job);
   }
 }

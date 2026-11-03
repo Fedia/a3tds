@@ -1,19 +1,17 @@
 {
-  "date": "2026-11-02",
-  "version": "0.6.0",
-  "environment": "Chromium Linux; actual sandbox, Worker, WASM; simulated startup failures",
+  "date": "2026-11-03",
+  "version": "0.7.0",
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,
   "extensionLoadVerified": false,
+  "environment": "Chromium Linux, actual private Worker/WASM under CSP, controlled startup failures on HTTP fixtures.",
   "passed": [
-    "missing sandbox ready: explicit diagnostic deadline and cleanup",
-    "synchronous Worker creation failure returned immediately",
-    "failed WASM fetch returned as interpreter startup error",
-    "delayed interpreter startup does not consume explicit diagnostic execution budget",
-    "standard-library code loads no wheels; pandas omits matplotlib",
-    "missing instantiateStreaming: same local WASM succeeds through byte instantiation",
-    "incorrect WASM MIME: same local WASM succeeds through byte instantiation",
-    "cancellation during interpreter startup clears the frame",
-    "foreign parent with valid nonce and MessagePort cannot start public sandbox"
+    "silent Worker has an explicit diagnostic deadline and is terminated",
+    "synchronous Worker construction failure is returned immediately",
+    "failed WASM load reports interpreter startup failure",
+    "delayed startup preserves execution budget; stdlib loads no wheels; pandas omits matplotlib",
+    "missing instantiateStreaming uses normal WebAssembly bytes",
+    "incorrect WASM MIME uses the packaged binary without streaming",
+    "cancellation during interpreter startup terminates Worker"
   ]
 }

@@ -13,6 +13,7 @@ from './chat-dom.js';
 export class DeepSeekAdapter {
   constructor(store) {
     this.store = store;
+    this.protocolVersion = 2;
     this.abort = false;
     this.waitMs = 180000;
     this.idleMs = 45000;
@@ -212,6 +213,9 @@ export class DeepSeekAdapter {
         await this.onStatus?.('completed', {
           elapsed: Math.floor((Date.now() - started) / 1000)
         });
+        this.lastReply = {
+          messageKey: s.messageKey || null
+        };
         return s.answer;
       }
       // A virtualized latest reply may be outside the mounted DOM. Reveal it, never resend.

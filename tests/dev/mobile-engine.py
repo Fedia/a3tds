@@ -7,7 +7,6 @@ ROOT=str(Path(__file__).resolve().parents[2])
 class Handler(SimpleHTTPRequestHandler):
  def end_headers(self):
   self.send_header('Access-Control-Allow-Origin','*')
-  if self.path=='/python-sandbox.html':self.send_header('Content-Security-Policy',"sandbox allow-scripts; script-src 'self' http://127.0.0.1:* 'wasm-unsafe-eval'; worker-src blob:; connect-src http://127.0.0.1:*; object-src 'none';")
   super().end_headers()
  def log_message(self,*args):pass
 servers=[]
@@ -48,7 +47,7 @@ async def main():
     if changes:await asyncio.gather(*(changed(f) for q in context.pages for f in q.frames))
     return None
    if op=='current':return next(({'id':n,'url':source['page'].url} for n,v in pages.items() if v==source['page']),None)
-   if op=='get-tab':return {'id':arg,'url':'https://chat.deepseek.com/a/chat/test' if arg==1 else pages[arg].url,'status':'complete'}
+   if op=='get-tab':return {'id':arg,'url':'https://chat.deepseek.com/a/chat/test' if arg in [1,3] else pages[arg].url,'status':'complete'}
    if op=='query':return [{'id':1,'url':'https://chat.deepseek.com/a/chat/test','title':'DeepSeek fixture'}]
    if op=='update':return {'id':arg}
    if op=='script':return [{'result':await pages[arg['id']].evaluate('([source,args])=>('+arg['source']+')(...args)',[arg['source'],arg['args']])}]
@@ -56,7 +55,7 @@ async def main():
    raise Exception(op)
   await context.expose_binding('bridge',bridge)
   script='''window.localView=value=>{if(location.href.startsWith(CHAT)&&value){if(value.ownerURL==='https://chat.deepseek.com/a/chat/test')value.ownerURL=location.href;if(value.chatURL==='https://chat.deepseek.com/a/chat/test')value.chatURL=location.href;}return value};window.listeners=[];window.storageListeners=[];const evt={addListener(){}};
-window.chrome={runtime:{id:'test-extension',getURL:p=>EXT+p,onMessage:{addListener:f=>listeners.push(f)},sendMessage:m=>bridge('message',m)},action:{onClicked:evt},permissions:{request:()=>bridge('permission',{}),contains:()=>bridge('permission',{})},storage:{local:{get:async k=>{const d=await bridge('get-storage',k);if(d.summary)localView(d.summary);if(d['ui-finals'])d['ui-finals'].forEach(localView);if(d['ui-history'])d['ui-history'].forEach(localView);return d},set:v=>bridge('set-storage',v)},session:{get:k=>bridge('get-storage',k),set:v=>bridge('set-session',v)},onChanged:{addListener:f=>storageListeners.push((changes,area)=>{if(changes.summary?.newValue)localView(changes.summary.newValue);if(changes['ui-finals']?.newValue)changes['ui-finals'].newValue.forEach(localView);if(changes['ui-history']?.newValue)changes['ui-history'].newValue.forEach(localView);f(changes,area)})}},tabs:{getCurrent:()=>bridge('current',null),get:id=>bridge('get-tab',id),query:q=>bridge('query',q),update:id=>bridge('update',id),onRemoved:evt,sendMessage:(id,message)=>bridge('tab-message',{id,message})},scripting:{executeScript:a=>bridge('script',{id:a.target.tabId,source:a.func.toString(),args:a.args})}};
+window.chrome={runtime:{id:'test-extension',getURL:p=>EXT+p,onMessage:{addListener:f=>listeners.push(f)},sendMessage:async m=>{const result=await bridge('message',m);if(m.type==='chat-ready')window.readyReply=result;return result}},action:{onClicked:evt},permissions:{request:()=>bridge('permission',{}),contains:()=>bridge('permission',{})},storage:{local:{get:async k=>{const d=await bridge('get-storage',k);if(d.summary)localView(d.summary);if(d['ui-finals'])d['ui-finals'].forEach(localView);if(d['ui-history'])d['ui-history'].forEach(localView);return d},set:v=>bridge('set-storage',v)},session:{get:k=>bridge('get-storage',k),set:v=>bridge('set-session',v)},onChanged:{addListener:f=>storageListeners.push((changes,area)=>{if(changes.summary?.newValue)localView(changes.summary.newValue);if(changes['ui-finals']?.newValue)changes['ui-finals'].newValue.forEach(localView);if(changes['ui-history']?.newValue)changes['ui-history'].newValue.forEach(localView);f(changes,area)})}},tabs:{getCurrent:()=>bridge('current',null),get:id=>bridge('get-tab',id),query:q=>bridge('query',q),update:id=>bridge('update',id),onRemoved:evt,sendMessage:(id,message)=>bridge('tab-message',{id,message})},scripting:{executeScript:a=>bridge('script',{id:a.target.tabId,source:a.func.toString(),args:a.args})}};
 const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=function(options){const r=attach.call(this,options);window.testShadow=r;return r};window.alert=text=>{window.lastAlert=text};window.confirm=()=>{throw new Error('Unexpected confirmation')};
 '''.replace('EXT',json.dumps(EXT)).replace('CHAT',json.dumps(CHAT))
   await context.add_init_script(script)
@@ -68,8 +67,9 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    document.querySelector('#send').onclick=()=>{
     const prompt=document.querySelector('#composer').value;document.querySelector('#composer').value='';const stop=document.createElement('button');stop.setAttribute('aria-label','Stop generating');document.body.append(stop);
     setTimeout(()=>{n++;const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';
-     let state={};try{state=JSON.parse(prompt.split('Состояние: ')[1])}catch{};
-     const command=n===1?{id:'py',tool:'python.run',args:{code:'result = {"sum": sum(data["values"])}',data:{values:[1,2,3]}},description:'Сумма'}:state.last?.data?.result?.sum!==6?{id:'status-'+n,tool:'python.status',args:{jobId:'py',waitMs:15000},description:'Проверить вычисление'}:{id:'finish',tool:'task.finish',args:{summary:'Сумма равна 6'},description:'Готово'};
+     let state={};try{state=JSON.parse(prompt.split('Состояние: ')[1].split('\\n')[0])}catch{};
+     if(prompt.startsWith('Результат инструмента'))try{state.last=JSON.parse(prompt.slice(prompt.indexOf(': ')+2,prompt.indexOf('\\n')))}catch{};
+     const command=n===1?{id:'py',tool:'python.run',args:{code:'result = {"sum": sum(data["values"])}',data:{values:[1,2,3]}},description:'Сумма'}:state.last?.data?.result?.sum!==6?{id:'status-'+n,tool:'python.status',args:{jobId:state.pythonJobs?.find(j=>j.status==='running')?.jobId||state.last?.data?.jobId,waitMs:15000},description:'Проверить вычисление'}:{id:'finish',tool:'task.finish',args:{summary:'Сумма равна 6'},description:'Готово'};
      answer.append(document.createTextNode(JSON.stringify(command)));const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');copy.textContent='Copy';answer.append(copy);document.querySelector('#answers').append(answer);stop.remove();
     },100);
    };
@@ -98,7 +98,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    await asyncio.sleep(.3)
   summary=shared.get('summary',{});print('SUMMARY',summary,flush=True)
   assert summary.get('status')=='completed',await chat.evaluate('window.lastAlert')
-  result_path=next(path for path in summary['files'] if path.endswith('/python-result-py.json'))
+  result_path=next(path for path in summary['files'] if '/python-result-' in path and path.endswith('.json'))
   assert await frame.evaluate("""async()=>{
     const {StateStore}=await import('./src/state-store.js'); const store=await new StateStore().init();
     const old=await store.get('archive-'+oldTaskId); const current=await store.get('task');
@@ -120,10 +120,29 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await settings.locator('#files-toggle').click();await settings.wait_for_selector('#files button')
   assert await settings.evaluate('document.documentElement.scrollWidth <= innerWidth')
   async with settings.expect_download() as pending:
-   await settings.locator('#files li').filter(has_text='python-result-py.json').locator('button').click()
+   await settings.locator('#files li').filter(has_text=Path(result_path).name).locator('button').click()
   download=await pending.value;await download.save_as(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json'))
   assert json.load(open(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json')))['result']['sum']==6
   await settings.close()
+  await frame.evaluate("""async()=>{
+    const {PythonRuntime}=await import('/src/python-runtime.js');window.originalReset=PythonRuntime.prototype.reset;
+    window.sessionReleased=null;PythonRuntime.prototype.reset=function(reason){const wasReady=this.ready,wasRunning=this.running;const value=originalReset.call(this,reason);window.sessionReleased={reason,wasReady,wasRunning,workerGone:!this.worker};return value;};
+  }""")
+  other=await context.new_page();pages[3]=other;await other.goto(CHAT+'fixtures/chat.html')
+  await other.evaluate("""()=>{document.querySelector('#send').onclick=()=>{document.querySelector('#composer').value='';const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';answer.textContent=JSON.stringify({tool:'task.finish',args:{summary:'Другой чат готов'}});const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');answer.append(copy);document.querySelector('#answers').append(answer);};}""")
+  await other.add_script_tag(url=EXT+'src/chat-ui.js');await other.wait_for_function("()=>window.testShadow?.host.isConnected && typeof testShadow.querySelector('input')?.onchange==='function'")
+  await other.evaluate("testShadow.querySelector('input').click()")
+  await other.wait_for_function("()=>Object.hasOwn(window,'readyReply')")
+  assert await other.evaluate("readyReply?.ok"),await other.evaluate("({readyReply,progress:document.querySelector('.psy-agent-progress')?.textContent})")
+  await other.locator('#composer').fill('Новая задача в другом чате');await other.locator('#send').tap()
+  for i in range(100):
+   if shared.get('summary',{}).get('ownerTabId')==3 and shared['summary'].get('status')=='completed':break
+   await asyncio.sleep(.2)
+  assert shared['summary']['ownerTabId']==3 and shared['summary']['status']=='completed',shared['summary']
+  assert await frame.evaluate("sessionReleased?.wasReady===true && sessionReleased.wasRunning===false && sessionReleased.workerGone===true"), 'Another chat must release even an idle prepared Worker'
+  await frame.evaluate("async()=>{const {PythonRuntime}=await import('/src/python-runtime.js');PythonRuntime.prototype.reset=originalReset}")
+  await other.close();pages.pop(3)
+  print('PASS: new task in another chat releases the previous idle Python session through authenticated service-worker routing',flush=True)
   assert await chat.evaluate("chrome.runtime.sendMessage({type:'executor-command',targetTabId:1,command:'cancel-send'})") is None
   await chat.evaluate("""()=>{document.querySelector('#send').onclick=()=>{document.querySelector('#composer').value='';const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';answer.textContent=JSON.stringify({id:'loop',tool:'python.run',args:{code:'while True: pass',data:{}},description:'loop'});const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');answer.append(copy);document.querySelector('#answers').append(answer);};}""")
   await chat.locator('#composer').fill('Бесконечный цикл для проверки остановки');await chat.locator('#send').tap()
@@ -161,7 +180,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   assert shared['summary']['status']=='completed',shared['summary']
   assert await frame.evaluate("""async expected=>{
     const {StateStore}=await import('./src/state-store.js'); const s=await(await new StateStore().init()).get('task');
-    return s.id===expected && s.commands.loop.result.status==='ok' && s.pythonJobs.loop.status==='cancelled' && !s.pending;
+    const operation=Object.values(s.commands).find(entry=>entry.command.description==='loop'&&entry.result.status==='ok');return s.id===expected && !!operation && s.pythonJobs[operation.command.id].status==='cancelled' && !s.pending;
   }""",old_id)
   print('PASS: continue in chat restores the same stopped task, seals old Python outcome, and finishes without settings',flush=True)
   print('PASS: internal file download, denied direct executor message, stop through chat toggle',flush=True)

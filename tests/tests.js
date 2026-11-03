@@ -103,6 +103,15 @@ test('JSON: корректная команда, запрет лишних по�
         delta: 3.1
       })]) await fail(() => parseCommand(JSON.stringify(x)));
 });
+test('Короткие команды и Python-блоки: валидация, defaults, обычный Markdown не выполняется',async()=>{
+  const short=parseCommand('{"tool":"browser.open","args":{"url":"https://example.com"}}',{id:'exchange_test'});
+  assert(short.id==='exchange_test'&&short.description.includes('https://example.com'),'Идентификатор и описание назначены локально');
+  const python=parseCommand('```python.run\ntext = "кавычки: \\""\nresult=42\n```',{id:'code'});
+  assert(python.tool==='python.run'&&python.args.code.includes('result=42')&&Object.keys(python.args.data).length===0,'Код передан без JSON-экранирования');
+  for(const raw of ['```python\nresult=1\n```','Текст\n```python.run\nresult=1\n```','```python.run\nresult=1\n```\n```python.run\nresult=2\n```','{"tool":"python.reset","args":{"all":true}}'])await fail(()=>parseCommand(raw,{id:'invalid'}));
+  assert(parseCommand('{"tool":"python.reset","args":{}}',{id:'reset'}).tool==='python.reset','Сброс сессии доступен');
+  assert(parseCommand('{"tool":"browser.type","args":{"ref":"r1_reference_e1","text":"find"}}',{id:'ref'}).args.ref,'Короткий ref принят');
+});
 test('Пути: запрет выхода, Windows-имён, абсолютных путей', async () => {
   for (const p of ['../x', '/x', 'a/../b', 'C:/x', 'a\\b', 'a//b', 'CON.txt', 'a.', 'a\u0000b'])
     await fail(() => pathParts(p));
@@ -242,9 +251,7 @@ test('Совместимый режим: snapshot, касание/клик, вв
     const snapshot = await tools.run(tab.tabId, 'snapshot');
     const field = snapshot.elements.find(e => e.tag === 'input');
     await tools.execute('browser.type', {
-      tabId: tab.tabId,
-      snapshot: snapshot.snapshot,
-      element: field.id,
+      ref:field.ref,
       text: 'mobile input'
     });
     const [read] = await chrome.scripting.executeScript({
@@ -255,9 +262,7 @@ test('Совместимый режим: snapshot, касание/клик, вв
     });
     assert(read.result === 'mobile input', 'Ввод через стандартные API');
     await fail(() => tools.execute('browser.type', {
-      tabId: tab.tabId,
-      snapshot: snapshot.snapshot,
-      element: field.id,
+      ref:field.ref,
       text: 'stale'
     }));
     const next = await tools.run(tab.tabId, 'snapshot');
@@ -402,10 +407,10 @@ test('DOM-адаптер: вставка, отправка, генерация, 
     'Неопределённая отправка не повторяется');
   await chrome.tabs.remove(tab.id);
 });
-test('Pyodide: pandas, статистика, matplotlib, файл и изоляция', async () => {
+test('Pyodide: pandas, статистика, matplotlib, файл и Worker без DOM', async () => {
   const p = new PythonRuntime();
   const r = await p.run(
-    `import pandas as pd\nimport statistics\nimport matplotlib.pyplot as plt\nfrom js import globalThis\nassert not hasattr(globalThis, 'chrome') or not hasattr(globalThis.chrome, 'tabs')\ntry:\n    globalThis.indexedDB.open('psy-agent')\n    raise AssertionError('IndexedDB must be inaccessible')\nexcept Exception as e:\n    assert 'SecurityError' in str(e)\nplt.plot([1,2],[3,4])\nplt.savefig('plot.png')\nresult={'total':int(pd.DataFrame(data)['x'].sum()),'mean':statistics.mean(data['x'])}`, {
+    `import pandas as pd\nimport statistics\nimport matplotlib.pyplot as plt\nfrom js import globalThis\nassert not hasattr(globalThis, 'document')\nassert hasattr(globalThis, 'indexedDB')\nplt.plot([1,2],[3,4])\nplt.savefig('plot.png')\nresult={'total':int(pd.DataFrame(data)['x'].sum()),'mean':statistics.mean(data['x'])}`, {
       x: [1, 2, 3]
     }, 90000);
   assert(r.result.total === 6 && r.files[0].bytes[0] === 137, 'Python/PNG');
@@ -424,8 +429,8 @@ test('Python: простой код без тяжёлых библиотек, э
   const p=new PythonRuntime(), phases=[];p.onProgress=phase=>phases.push(phase);
   const r=await p.run("import sys, asyncio\nawait asyncio.sleep(0.01)\nresult={'sum':sum(data),'heavy':[name for name in ['numpy','pandas','matplotlib'] if name in sys.modules]}",[1,2,3],1000);
   assert(r.result.sum===6&&r.result.heavy.length===0,'Простой код не загружает NumPy/pandas/matplotlib');
-  assert(['sandbox','worker','bootstrap','runtime','packages','inputs','running','exporting'].every(x=>phases.includes(x)),'Все этапы различимы');
-  assert(!p.worker,'Среда очищена после выполнения');
+  assert(['worker','bootstrap','runtime','packages','inputs','running','exporting'].every(x=>phases.includes(x)),'Все этапы различимы');
+  assert(p.worker&&!p.running,'Среда сохраняется после выполнения');p.reset();
 });
 test('Python: таймаут и остановка завершают Worker', async () => {
   const p = new PythonRuntime();
@@ -456,6 +461,19 @@ test('Python jobs: живой прогресс/вывод, другие инст
   cc.s.pending={command:cmd};await cc.recoverPending();assert(cc.s.last.status==='ok'&&runs===1,'Прерванная квитанция не перезапускает Python');
   await fail(()=>cc.execute(command('foreign','python.status',{jobId:'other-task-job',waitMs:0})));
 });
+test('Python jobs: общая сессия между задачами, сброс и статус без повторных записей больших результатов',async()=>{
+  const runtime=new PythonRuntime();const cc=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:runtime});await cc.create('Первая задача');
+  const first=await cc.execute(command('session-first','python.run',{code:'shared_value=42\nopen("session.txt","w").write("saved")\nresult=shared_value',data:{}}));
+  const wait=async id=>{for(let i=0;i<100;i++){const value=await cc.execute(command('read-'+i,'python.status',{jobId:id,waitMs:100}));if(value.status!=='running')return value;}throw new Error('Python fixture did not finish');};
+  const done=await wait(first.jobId);assert(done.result===42,'Первый результат');const saved=done.files[0].path;
+  const put=store.putPythonJob.bind(store);let writes=0;store.putPythonJob=(...args)=>{writes++;return put(...args)};
+  try{await cc.execute(command('status-a','python.status',{jobId:first.jobId,waitMs:0}));await cc.execute(command('status-b','python.status',{jobId:first.jobId,waitMs:0}));assert(writes===0,'Неизменённый статус не перезаписывает результат');}finally{store.putPythonJob=put;}
+  await cc.create('Следующая задача в том же чате');
+  const second=await cc.execute(command('session-second','python.run',{code:'result=shared_value',data:{}}));const warm=await wait(second.jobId);
+  assert(warm.result===42&&warm.sessionId===done.sessionId&&warm.sessionReused,'Переменные доступны другой задаче того же чата');
+  const reset=await cc.execute(command('session-reset','python.reset',{}));assert(reset.status==='reset'&&!runtime.worker,'Явный сброс');
+  assert((await files.read(saved)).text==='saved','Сброс не удаляет сохранённые результаты');
+});
 test('Python jobs: отмена, запрет преждевременного finish и восстановление потерянного Worker', async()=>{
   let rejectRun,runs=0,limit;
   const runtime={run:(_code,_data,time)=>{runs++;limit=time;return new Promise((_,reject)=>{rejectRun=reject})},cancel(){rejectRun?.(new Error('Python прерван пользователем'))}};
@@ -482,7 +500,7 @@ test('Python jobs: результат переживает ошибку эксп
   const write=files.write.bind(files);files.write=async()=>{throw new Error('Папка временно недоступна')};
   resolveRun(outcome);await cc.pythonJobs().jobs.get(job.jobId).completion;
   files.write=write;
-  const staged=await store.get('python-job:'+cc.s.id+':'+job.jobId);assert(staged.outcome.files[0].bytes.length===4,'Полный результат сохранён до выгрузки');
+  const staged=await store.get('python-job:'+cc.s.id+':'+job.jobId);assert(!staged.outcome && (await store.get(staged.outcomeRef)).files[0].bytes.length===4,'Полный результат сохранён до выгрузки');
   const fresh=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:{cancel(){},run(){throw new Error('Нельзя повторять')}}});fresh.s=await store.get('task');
   const saved=await fresh.execute(command('export-recovery','python.status',{jobId:job.jobId,waitMs:0}));assert((await files.read(saved.files[0].path)).text==='KEEP'&&runs===1,'После восстановления нужен только экспорт');
   // A result from an old frame patches its archive, never the active task object.
@@ -496,6 +514,23 @@ test('Python jobs: результат переживает ошибку эксп
   assert((await store.get('python-export-queue')).length===0&&(await store.get('task')).id===next.id&&runs===1,'Архивная выгрузка доведена до конца без повторного Python и дубликатов');
 });
 
+test('Python jobs: запоздалая запись прогресса не теряет готовый результат',async()=>{
+  let finishRun;
+  const runtime={run(){return new Promise(resolve=>finishRun=resolve)},cancel(){}};
+  const cc=new AgentController({store,files,browser:{detach:async()=>{}},model:{},python:runtime});await cc.create('Гонка сохранения');
+  const started=await cc.execute(command('publish-race','python.run',{code:'result=42',data:{}}));
+  for(let i=0;i<100&&!finishRun;i++)await sleep(1);
+  const jobs=cc.pythonJobs(),job=jobs.jobs.get(started.jobId),put=store.putPythonJob.bind(store);
+  let release,entered=false;const gate=new Promise(resolve=>release=resolve);
+  store.putPythonJob=async(key,record)=>{const snapshot={...record};entered=true;await gate;return put(key,snapshot)};
+  job.record.progress='Последний прогресс';job.updates=job.updates.then(()=>jobs.publish(job));
+  for(let i=0;i<100&&!entered;i++)await sleep(1);
+  finishRun({stdout:'',stderr:'',result:42,files:[{path:'race.txt',bytes:new TextEncoder().encode('DURABLE')}],stdoutTruncated:false,stderrTruncated:false});
+  await sleep(5);assert(job.record.status==='running','До фиксации результат не объявлен завершённым');
+  release();await job.completion;store.putPythonJob=put;
+  const value=await jobs.status(started.jobId,0);assert(value.status==='completed'&&value.result===42,'Готовый результат сохранён после предыдущей записи');
+  assert((await files.read(value.files[0].path)).text==='DURABLE','Байты результата не потеряны');
+});
 test('Сквозной цикл с тестовой моделью: корпус → Python → CSV/отчёт; duplicate guard', async () => {
   let calls = 0;
   let id;
@@ -570,6 +605,18 @@ test('Сквозной цикл с тестовой моделью: корпус
   const saved = await store.get('task');
   assert(saved.corpus[0].hash === c.s.corpus[0].hash, 'Корпус устойчив');
   await chrome.tabs.remove(id);
+});
+test('Новый протокол: bootstrap один раз, автоматические id, два одинаковых запроса и восстановление без повтора',async()=>{
+  let turns=0,writes=0;
+  const fakeFiles={permission:async()=>{},write:async path=>{writes++;return {path}}};
+  const cc=new AgentController({store,files:fakeFiles,browser:{detach:async()=>{}},python:{cancel(){}},model:{
+    async exchange(prompt){turns++;assert(turns===1?prompt.includes('Доступные инструменты'):!prompt.includes('Доступные инструменты'),'Инструкция не повторяется');return turns<=2?'{"id":"model-repeats-id","tool":"files.write","args":{"path":"same.txt","text":"value"}}':'{"tool":"task.finish","args":{"summary":"готово"}}';}
+  }});
+  cc.model.protocolVersion=2;cc.persist=async()=>{};await cc.create('Короткие команды');await cc.start();
+  assert(cc.s.status==='completed'&&writes===2&&Object.keys(cc.s.commands).every(id=>id.startsWith('exchange_')),'Одинаковые аргументы в разных обменах не потеряны');
+  const saved=Object.values(cc.s.commands).find(entry=>entry.command.tool==='files.write');
+  cc.s.status='paused';cc.s.received='{"tool":"files.write","args":{"path":"same.txt","text":"value"}}';cc.s.exchangeId=saved.command.id;await cc.save();
+  await cc.start();assert(writes===2&&cc.s.status==='completed','Сохранённый ответ не исполнился повторно');
 });
 test('Неподтверждённая цитата отклоняется', async () => {
   await fail(() => c.execute(command('bad', 'analysis.save', {
@@ -750,7 +797,7 @@ test('Длительная задача: продолжение после пр�
   await cc.start();
   assert(cc.s.status==='completed'&&runs===55&&cc.s.steps===106&&cc.s.files.includes('old-result.csv'),'Старая задача продолжена без сброса и потери файлов');
   cc.s.files=Array.from({length:2000},(_,i)=>'tasks/'+cc.s.id+'/pages/page-'+i+'.json');
-  const prompt=cc.prompt(),context=JSON.parse(prompt.split('Состояние: ')[1]);
+  const prompt=cc.prompt(),context=JSON.parse(prompt.split('Состояние: ')[1].split('\n')[0]);
   assert(prompt.length<45000&&context.files.length===20&&context.totalFiles===2000&&context.filesTruncated,'История файлов не раздувает каждый запрос, усечение явно обозначено');
   calls=0;runs=0;
   cc.model.exchange=async()=>{calls++;return JSON.stringify(command('duplicate-loop','browser.scroll',{tabId:1,delta:42}))};

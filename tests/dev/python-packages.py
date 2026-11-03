@@ -12,7 +12,6 @@ class Handler(SimpleHTTPRequestHandler):
  def end_headers(self):
   self.send_header('Access-Control-Allow-Origin','*')
   policy=MANIFEST['content_security_policy']['extension_pages']
-  if self.path=='/python-sandbox.html':policy=MANIFEST['content_security_policy']['sandbox'].replace('chrome-extension:','http://127.0.0.1:*')
   self.send_header('Content-Security-Policy',policy);super().end_headers()
 server=ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Handler,directory=str(ROOT)))
 threading.Thread(target=server.serve_forever,daemon=True).start();BASE=f'http://127.0.0.1:{server.server_port}/'
@@ -36,10 +35,10 @@ async def main():
    except Exception as error:
     await route.fulfill(status=502,headers={'Access-Control-Allow-Origin':'*'},body=str(error))
   for host in ['pypi.org','files.pythonhosted.org','cdn.jsdelivr.net']:
-   await page.route('https://'+host+'/**',remote)
+   await page.context.route('https://'+host+'/**',remote)
   await page.goto(BASE+'fixtures/article.html')
-  await page.evaluate("""async()=>{const {PythonRuntime}=await import('/src/python-runtime.js');window.python=new PythonRuntime();window.progress=[];python.onProgress=(phase,detail)=>progress.push({phase,detail});}""")
-  result=await page.evaluate('''python.run(`import micropip
+  await page.evaluate("""async()=>{const {PythonRuntime}=await import('/src/python-runtime.js');window.python=new PythonRuntime();window.progress=[];python.onProgress=(phase,detail)=>progress.push({phase,detail});window.run=async(...args)=>{const r=await python.run(...args);python.acknowledge(r.requestId);return r};}""")
+  result=await page.evaluate('''run(`import micropip
 await micropip.install("python-slugify==8.0.4")
 from slugify import slugify
 result = {"slug": slugify("Привет, мир!"), "has_dependency": __import__("text_unidecode").unidecode("мир")}`,{},null)''')
@@ -47,7 +46,7 @@ result = {"slug": slugify("Привет, мир!"), "has_dependency": __import__
   assert any('/simple/python-slugify/' in url for url in requests) and any('python_slugify-8.0.4' in url for url in requests),requests
   assert any('text_unidecode' in url for url in requests),requests
   print('PASS: top-level await micropip.install downloads pinned PyPI wheel and dependency; imported code executes',flush=True)
-  result=await page.evaluate('''python.run(`import micropip
+  result=await page.evaluate('''run(`import micropip
 await micropip.install("wordcloud==1.9.3")
 from wordcloud import WordCloud
 wc = WordCloud(width=200, height=100, background_color="white").generate("данные данные исследование студент")
@@ -58,7 +57,10 @@ result={"words":len(wc.words_)}`,{},null)''')
   assert any('/pyodide/v0.27.7/full/wordcloud-' in url for url in requests),requests
   print('PASS: compiled wordcloud for the pinned Pyodide ABI loads from CDN, uses local matplotlib and creates PNG',flush=True)
   count=len(requests)
-  result=await page.evaluate('''python.run(`from pyodide.http import pyfetch
+  warm=await page.evaluate("run('result=len(wc.words_)',{},null)")
+  assert warm['result']==3 and warm['sessionReused'] and len(requests)==count
+  print('PASS: wordcloud remains installed and its object survives; warm run makes no package requests',flush=True)
+  result=await page.evaluate('''run(`from pyodide.http import pyfetch
 blocked=[]
 for url, kwargs in [("https://pypi.org/simple/emoji/?secret=data",{}),("https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pyodide.js",{}),("https://pypi.org/simple/emoji/",{"method":"POST","body":"private data"})]:
     try:
@@ -75,7 +77,7 @@ result={"blocked":blocked}`,{},null)''')
    waiting.set();await release.wait()
    try:await route.abort()
    except Exception:pass
-  await page.route('https://pypi.org/simple/agent-cancel-fixture/',hold)
+  await page.context.route('https://pypi.org/simple/agent-cancel-fixture/',hold)
   await page.evaluate('''()=>{window.pending=python.run("from pyodide.http import pyfetch\\nawait pyfetch('https://pypi.org/simple/agent-cancel-fixture/')",{},null).then(()=>({cancelled:false}),e=>({cancelled:e.message.includes('прерван')}));}''')
   await asyncio.wait_for(waiting.wait(),30)
   await page.evaluate('python.cancel()')

@@ -1,4 +1,4 @@
-"""Real opaque sandbox/Worker/WASM with controlled failures; not installed-extension testing."""
+"""Persistent Worker/WASM startup failures under MV3 CSP; HTTP test origin."""
 from pathlib import Path
 import asyncio, functools, json, os, shutil, threading, time
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
@@ -6,11 +6,12 @@ from playwright.async_api import async_playwright
 ROOT = Path(__file__).resolve().parents[2]
 class Handler(SimpleHTTPRequestHandler):
  def log_message(self,*args): pass
+ def copyfile(self,source,output):
+  try:super().copyfile(source,output)
+  except (BrokenPipeError,ConnectionResetError):pass
  def end_headers(self):
   self.send_header('Access-Control-Allow-Origin','*')
   policy="script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; object-src 'none'"
-  if self.path.split('?')[0]=='/python-sandbox.html':
-   policy="sandbox allow-scripts; script-src 'self' http://127.0.0.1:* 'wasm-unsafe-eval'; worker-src blob:; connect-src http://127.0.0.1:*; object-src 'none'"
   self.send_header('Content-Security-Policy',policy);super().end_headers()
 server=ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Handler,directory=str(ROOT)))
 threading.Thread(target=server.serve_forever,daemon=True).start();BASE=f'http://127.0.0.1:{server.server_port}/'
@@ -25,33 +26,16 @@ async def failed(page, code='result=1'):
 async def main():
  async with async_playwright() as p:
   browser=await p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN') or shutil.which('chromium'),args=['--no-sandbox'])
-  # Public WAR assets must not let an arbitrary website submit Python jobs.
-  page=await browser.new_page();await page.goto(BASE.replace('127.0.0.1','localhost')+'fixtures/article.html')
-  worker_requests=[];page.on('request',lambda r:worker_requests.append(r.url) if '/src/python-worker.js' in r.url else None)
-  received=await page.evaluate("""async base=>{
-    const frame=document.createElement('iframe');frame.sandbox='allow-scripts';frame.src=base+'python-sandbox.html#foreign-parent';
-    const ready=new Promise((resolve,reject)=>{
-      const listener=event=>{if(event.source===frame.contentWindow&&event.data?.type==='python-ready'){window.removeEventListener('message',listener);clearTimeout(timer);resolve()}};
-      const timer=setTimeout(()=>{window.removeEventListener('message',listener);reject(new Error('Public sandbox did not load'))},3000);
-      window.addEventListener('message',listener);
-    });document.body.append(frame);await ready;
-    const channel=new MessageChannel();let received=false;channel.port1.onmessage=()=>received=true;
-    frame.contentWindow.postMessage({type:'python-start',nonce:'foreign-parent',code:'result=42',data:{},files:[]},'*',[channel.port2]);
-    await new Promise(resolve=>setTimeout(resolve,500));channel.port1.close();frame.remove();return received;
-  }""",BASE)
-  assert not received and not worker_requests
-  await page.close();print('PASS: public sandbox rejects a foreign parent with a valid nonce and port',flush=True)
-  # Silent/missing sandbox script must fail before the old universal 60-second timeout.
-  page=await prepare(browser);await page.route('**/python-sandbox.html',lambda r:r.fulfill(body='<html></html>',content_type='text/html'))
-  await page.evaluate('runtime.frameMs=200');result=await failed(page)
-  assert result['phase']=='sandbox' and result['definite'] and 'не ответила' in result['error'],result
-  await page.close();print('PASS: missing sandbox ready reports its stage and clears the frame',flush=True)
-  # Worker constructor exceptions used to escape the event listener and leave the port unanswered.
   page=await prepare(browser)
-  await page.route('**/src/python-sandbox.js',lambda r:r.fulfill(body="globalThis.Worker=class {constructor(){throw new Error('test Worker blocked')}};\n"+(ROOT/'src/python-sandbox.js').read_text(),content_type='text/javascript'))
+  await page.route('**/src/python-worker.js',lambda r:r.fulfill(body='onmessage=()=>{}',content_type='text/javascript'))
+  await page.evaluate('runtime.workerMs=200');result=await failed(page)
+  assert result['phase']=='worker' and result['definite'],result
+  await page.close();print('PASS: silent Worker has an explicit diagnostic deadline and is terminated',flush=True)
+  page=await prepare(browser)
+  await page.evaluate("()=>{globalThis.Worker=class {constructor(){throw new Error('test Worker blocked')}}}")
   result=await failed(page)
   assert result['phase']=='worker' and result['definite'] and 'test Worker blocked' in result['error'],result
-  await page.close();print('PASS: synchronous Worker failure is returned immediately',flush=True)
+  await page.close();print('PASS: synchronous Worker construction failure is returned immediately',flush=True)
   page=await prepare(browser);await page.route('**/vendor/pyodide/pyodide.asm.wasm',lambda r:r.abort())
   await page.evaluate('runtime.startupMs=4000');started=time.monotonic()
   result=await failed(page)
@@ -83,6 +67,6 @@ async def main():
   page=await prepare(browser)
   await page.evaluate("runtime.onProgress=phase=>{if(phase==='runtime')runtime.cancel()}")
   result=await failed(page);assert 'прерван' in result['error'] and result['phase']=='runtime',result
-  await page.close();print('PASS: cancellation during interpreter startup clears Worker/frame',flush=True)
+  await page.close();print('PASS: cancellation during interpreter startup terminates Worker',flush=True)
   await browser.close()
 asyncio.run(main());server.shutdown()

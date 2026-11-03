@@ -1,21 +1,28 @@
 import {
-  PythonPackages
-} from './python-packages.js';
-import {
   assert,
   pathParts
 } from './util.js';
-/** Only code and explicit data cross the channel into the opaque sandbox. */
+
+/** One lazily created, reusable extension Worker. Python shares this extension's origin. */
 export class PythonRuntime {
   constructor() {
-    // No automatic deadline: the agent monitors the job and can cancel explicitly.
-    // Finite values remain available for diagnostic tests, never imposed on tasks.
-    this.frameMs = Infinity;
-    this.workerMs = Infinity;
     this.startupMs = Infinity;
+    this.workerMs = Infinity;
+    this.sessionId = null;
+    this.running = false;
   }
-  async run(code, data, timeMs = null, files = []) {
-    assert(!this.worker, 'Python уже выполняется');
+  async bindScope(chatURL, project) {
+    const epoch = this.scopeEpoch = (this.scopeEpoch || 0) + 1;
+    const sameChat = !this.chatURL || this.chatURL === chatURL || ['/', '/a/chat', '/a/chat/'].includes(new URL(this.chatURL).pathname);
+    const sameProject = !this.project || this.project === project ||
+      !!(project && this.project.isSameEntry && await this.project.isSameEntry(project));
+    if (epoch !== this.scopeEpoch) return;
+    if (!sameChat || !sameProject) this.reset('Изменён чат или папка');
+    this.chatURL = chatURL;
+    this.project = project;
+  }
+  async run(code, data = {}, timeMs = null, files = []) {
+    assert(!this.running, 'Python уже выполняется');
     assert(Array.isArray(files) && files.length <= 20, 'Слишком много входных файлов');
     let total = 0;
     const names = [];
@@ -27,150 +34,106 @@ export class PythonRuntime {
       total += file.bytes.length;
     }
     assert(total <= 20000000, 'Входные файлы больше 20 МБ');
+    const reused = !!this.ready;
+    if (!this.worker) {
+      this.sessionId = crypto.randomUUID();
+      try {
+        this.worker = new Worker(new URL('./python-worker.js', import.meta.url));
+      } catch (error) {
+        this.sessionId = null;
+        error.pythonPhase = 'worker';
+        error.definite = true;
+        throw error;
+      }
+      this.worker.onmessage = event => {
+        if (event.data?.fatal && !this.running) this.reset('Python Worker завершился');
+        else this.receive?.(event.data);
+      };
+      this.worker.onerror = event => {
+        const error = new Error('Python Worker: ' + event.message);
+        this.fail ? this.fail(error, true) : this.reset(error.message);
+      };
+      this.worker.onmessageerror = () => {
+        const error = new Error('Python: повреждён ответ Worker');
+        this.fail ? this.fail(error, true) : this.reset(error.message);
+      };
+    }
+    this.running = true;
+    const sessionId = this.sessionId,
+      requestId = crypto.randomUUID(),
+      started = performance.now();
     return new Promise((resolve, reject) => {
-      const frame = document.createElement('iframe'),
-        channel = new MessageChannel();
-      const nonce = crypto.randomUUID(),
-        url = new URL('../python-sandbox.html', import.meta.url);
-      url.hash = nonce;
-      frame.hidden = true;
-      frame.sandbox = 'allow-scripts';
-      frame.src = url.href;
-      this.worker = frame;
-      const startupDeadline = Date.now() + this.startupMs;
-      const downloads = new AbortController();
-      let packageCount = 0,
-        packagePhase = 'packages';
-      let packageLoader;
-      const loader = () => packageLoader ||= (async () => {
-        const client = new PythonPackages({
-          signal: downloads.signal,
-          onProgress: message => progress('packages', JSON.stringify(message))
-        });
-        await client.init();
-        return client;
-      })();
-      let timer, settled = false,
-        connected = false,
-        phase = 'sandbox',
-        executionDeadline = null;
-      const finish = (err, value) => {
+      let phase = 'worker',
+        timer, settled = false,
+        codeStarted = null;
+      const finish = (error, value, fatal = false) => {
         if (settled) return;
         settled = true;
-        downloads.abort();
         clearTimeout(timer);
-        window.removeEventListener('message', ready);
-        try {
-          channel.port1.postMessage({
-            type: 'cancel'
-          });
-        } catch {}
-        channel.port1.close();
-        channel.port2.close();
-        frame.remove();
-        this.worker = null;
-        this.reject = null;
-        if (err) {
-          err.pythonPhase = phase;
-          if (executionDeadline === null) err.definite = true;
+        this.running = false;
+        this.receive = null;
+        this.fail = null;
+        if (fatal) {
+          this.worker?.terminate();
+          this.worker = null;
+          this.ready = false;
+          this.sessionId = null;
         }
-        err ? reject(err) : resolve(value);
-      };
-      const arm = (ms, message) => {
-        clearTimeout(timer);
-        if (!Number.isFinite(ms)) return;
-        timer = setTimeout(() => {
-          const error = new Error(message);
-          error.code = executionDeadline === null ? 'PYTHON_STARTUP_TIMEOUT' : 'PYTHON_EXECUTION_TIMEOUT';
-          finish(error);
-        }, Math.max(0, ms));
+        if (error) {
+          error.pythonPhase = phase;
+          error.sessionId = sessionId;
+          error.sessionReused = reused;
+          error.definite = codeStarted === null;
+          reject(error);
+        } else resolve({
+          ...value,
+          sessionId,
+          sessionReused: reused,
+          elapsedMs: performance.now() - started
+        });
       };
       const progress = (next, detail) => {
-        if (settled) return;
         phase = next;
-        if (next === 'running' && executionDeadline === null) executionDeadline = timeMs === null ? Infinity : Date.now() + timeMs;
-        if (executionDeadline !== null) {
-          if (Number.isFinite(executionDeadline)) arm(executionDeadline - Date.now(), 'Python: истекло заданное время выполнения кода, Worker завершён');
-          else clearTimeout(timer);
-        } else {
-          const remaining = startupDeadline - Date.now();
-          const budget = next === 'sandbox' ? this.frameMs : next === 'worker' ? this.workerMs : remaining;
-          const detail = {
-            sandbox: 'не ответила изолированная среда',
-            worker: 'не запустился Worker',
-            bootstrap: 'не загрузились файлы среды',
-            runtime: 'не загрузился интерпретатор',
-            packages: 'не загрузились библиотеки',
-            inputs: 'не подготовлены данные'
-          } [next] || 'не завершилась подготовка';
-          arm(Math.min(budget, remaining), 'Python: ' + detail + '. Выполнение кода не начиналось.');
-        }
+        if (next === 'running' && codeStarted === null) codeStarted = performance.now();
+        clearTimeout(timer);
+        const remaining = codeStarted === null ? Math.min(this.startupMs - (performance.now() - started), next === 'worker' ? this.workerMs : Infinity) :
+          timeMs === null ? Infinity : timeMs - (performance.now() - codeStarted);
+        if (Number.isFinite(remaining)) timer = setTimeout(() => {
+          const error = new Error('Python: истекло заданное диагностическое время (' + phase + ')');
+          error.code = codeStarted === null ? 'PYTHON_STARTUP_TIMEOUT' : 'PYTHON_EXECUTION_TIMEOUT';
+          finish(error, null, true);
+        }, Math.max(0, remaining));
         try {
           Promise.resolve(this.onProgress?.(next, detail)).catch(() => {});
         } catch {}
       };
-      const ready = event => {
-        if (settled || connected || event.source !== frame.contentWindow || event.data?.type !== 'python-ready' || event.data.nonce !== nonce) return;
-        connected = true;
-        progress('worker');
-        try {
-          frame.contentWindow.postMessage({
-            type: 'python-start',
-            nonce,
-            code,
-            data,
-            files
-          }, '*', [channel.port2]);
-        } catch (error) {
-          finish(error);
-        }
-      };
-      this.reject = reason => finish(new Error(reason));
-      window.addEventListener('message', ready);
-      channel.port1.onmessage = event => {
-        if (settled) return;
-        const message = event.data;
-        if (message?.type === 'python-package-request') {
-          if (!Number.isSafeInteger(message.id) || typeof message.url !== 'string' || message.url.length > 2000) return;
-          if (packageCount++ === 0) packagePhase = phase;
-          (async () => {
-            try {
-              const response = await (await loader()).download(message.url);
-              if (!settled) channel.port1.postMessage({
-                type: 'python-package-response',
-                id: message.id,
-                ok: true,
-                contentType: response.contentType,
-                bytes: response.bytes
-              }, [response.bytes.buffer]);
-            } catch (error) {
-              if (!settled) channel.port1.postMessage({
-                type: 'python-package-response',
-                id: message.id,
-                ok: false,
-                error: error.message
-              });
-            } finally {
-              if (--packageCount === 0 && !settled) progress(packagePhase);
-            }
-          })();
+      this.fail = (error, fatal = true) => finish(error, null, fatal);
+      this.receive = message => {
+        if (message.fatal && !message.requestId) {
+          finish(new Error(message.error), null, true);
           return;
         }
-        if (message?.type === 'python-progress') {
-          if (['bootstrap', 'runtime', 'packages', 'inputs', 'running', 'exporting'].includes(message.phase)) progress(message.phase, message.detail);
+        if (message.requestId !== requestId) return;
+        if (message.type === 'python-progress') {
+          progress(message.phase, message.detail);
           return;
         }
-        if (message?.type === 'python-output') {
+        if (message.type === 'python-output') {
           try {
             Promise.resolve(this.onOutput?.({
-              stream: message.stream === 'stderr' ? 'stderr' : 'stdout',
+              stream: message.stream,
               text: String(message.text).slice(-4000)
             })).catch(() => {});
           } catch {}
           return;
         }
-        if (!message?.ok) {
-          finish(new Error((message?.error || 'Python не вернул результат') + '\n' + (message?.stderr || '')));
+        if (!message.ok) {
+          const error = new Error(message.error || 'Python не вернул результат');
+          error.timings = message.timings;
+          error.stdout = message.stdout;
+          error.stderr = message.stderr;
+          this.ready = !message.fatal;
+          finish(error, null, message.fatal);
           return;
         }
         try {
@@ -178,22 +141,50 @@ export class PythonRuntime {
           let bytes = 0;
           for (const file of message.files) {
             pathParts(file.path);
-            assert((file.bytes instanceof Uint8Array || Array.isArray(file.bytes)) && file.bytes.length <= 5000000, 'Некорректный выходной файл Python');
+            assert(file.bytes instanceof Uint8Array && file.bytes.length <= 5000000, 'Некорректный выходной файл Python');
             bytes += file.bytes.length;
           }
-          assert(bytes <= 20000000, 'Выходные файлы Python больше 20 МБ');
-          assert(typeof message.stdout === 'string' && typeof message.stderr === 'string', 'Некорректный вывод Python');
+          assert(bytes <= 20000000 && typeof message.stdout === 'string' && typeof message.stderr === 'string', 'Некорректный вывод Python');
+          this.ready = true;
           finish(null, message);
         } catch (error) {
-          finish(error);
+          finish(error, null, true);
         }
       };
-      frame.onerror = () => finish(new Error('Не удалось открыть изолированную среду Python'));
-      progress('sandbox');
-      if (!settled) document.body.append(frame);
+      progress('worker');
+      if (settled) return;
+      try {
+        this.worker.postMessage({
+          type: 'run',
+          requestId,
+          code,
+          data,
+          files
+        }, [...new Set(files.map(file => file.bytes.buffer))]);
+      } catch (error) {
+        finish(error, null, true);
+      }
     });
   }
+  acknowledge(requestId) {
+    this.worker?.postMessage({
+      type: 'ack',
+      requestId
+    });
+  }
+  reset(reason = 'Python-сессия сброшена') {
+    const previousSessionId = this.sessionId;
+    this.fail?.(new Error(reason), true);
+    this.worker?.terminate();
+    this.worker = null;
+    this.ready = false;
+    this.sessionId = null;
+    return {
+      status: 'reset',
+      previousSessionId
+    };
+  }
   cancel() {
-    this.reject?.('Python прерван пользователем');
+    return this.reset('Python прерван пользователем');
   }
 }

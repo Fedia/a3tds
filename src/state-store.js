@@ -39,15 +39,23 @@ export class StateStore {
     });
   }
   async putPythonJob(key, record) {
-    const snapshot = structuredClone(record);
+    const snapshot = {
+      ...record
+    };
+    const outcome = snapshot.outcome;
+    if (outcome) {
+      snapshot.outcomeRef = key + ':output';
+      delete snapshot.outcome;
+    }
     await new Promise((resolve, reject) => {
       const tx = this.db.transaction('kv', 'readwrite'),
         kv = tx.objectStore('kv'),
         q = kv.get('python-export-queue');
       q.onsuccess = () => {
         const queue = q.result || [];
+        if (outcome) kv.put(outcome, snapshot.outcomeRef);
         kv.put(snapshot, key);
-        kv.put(snapshot.outcome ? [...new Set([...queue, key])] : queue.filter(item => item !== key), 'python-export-queue');
+        kv.put(snapshot.outcomeRef ? [...new Set([...queue, key])] : queue.filter(item => item !== key), 'python-export-queue');
       };
       tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
@@ -97,6 +105,9 @@ export class StateStore {
   }
   async save(s) {
     await this.put('task', structuredClone(s));
+    await this.saveProjection(s);
+  }
+  async saveProjection(s) {
     if (this.name === 'psy-agent') {
       const summary = projectTask(s),
         final = summary.final;

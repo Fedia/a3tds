@@ -15,7 +15,9 @@
     belongsToChat,
     pythonHistoryEntry
   } = await import(chrome.runtime.getURL('src/ui-state.js'));
-  const { mountChatScroll } = await import(chrome.runtime.getURL('src/chat-scroll.js'));
+  const {
+    mountChatScroll
+  } = await import(chrome.runtime.getURL('src/chat-scroll.js'));
   const scroll = mountChatScroll();
   let enabled = false,
     busy = false,
@@ -108,6 +110,9 @@
     if (progress.style.color !== color) progress.style.color = color;
     if (host.style.color !== color) host.style.color = color;
   }
+  setInterval(() => {
+    if (document.visibilityState === 'visible' && Object.values(pythonViews).some(jobs => Object.values(jobs).some(job => job.status === 'running'))) unmountView.refresh?.();
+  }, 1000);
   const showNotice = text => {
     transient = text ? shortReason(text) : '';
     clearTimeout(noticeTimer);
@@ -150,9 +155,11 @@
       if (host.nextElementSibling !== progress) host.after(progress);
     }
     paint();
+    unmountView.refresh?.();
   }
   let placementTimer;
   new MutationObserver(records => {
+      if (records.every(record => record.target.closest?.('.ds-virtual-list,[role=log]'))) return;
       if (records.every(record => record.type === 'attributes' && [host, progress].includes(record.target))) return;
       if (placementTimer) return;
       placementTimer = setTimeout(() => {

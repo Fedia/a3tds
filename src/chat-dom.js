@@ -93,6 +93,22 @@ export function deepseekDOM(action, config, payload) {
       } catch {}
     }
     c.querySelectorAll('button,[role=button]').forEach(x => x.remove());
+    const pre = c.querySelectorAll('pre');
+    if (pre.length === 1) {
+      const block = pre[0],
+        code = block.querySelector('code') || block;
+      const tagged = language => [block, code].some(node => node.getAttribute('data-language') === language || node.classList.contains('language-' + language));
+      const content = code.textContent.replace(/\n$/, '');
+      const outside = c.cloneNode(true);
+      outside.querySelector('pre').remove();
+      const rest = outside.textContent.trim().toLowerCase();
+      if (rest === 'python.run' || tagged('python.run') && !rest) {
+        const length = Math.max(2, ...content.split('\n').map(line => line.match(/^(`+)[ \t]*$/)?.[1].length || 0)) + 1;
+        const fence = '`'.repeat(length);
+        return fence + 'python.run\n' + content + '\n' + fence;
+      }
+      if (rest === 'json' || tagged('json') && !rest) return content;
+    }
     return c.textContent.trim();
   });
   if (action === 'elements') return {
@@ -119,6 +135,7 @@ export function deepseekDOM(action, config, payload) {
     return {
       status,
       answer: last,
+      messageKey: latest?.closest('[data-virtual-list-item-key]')?.getAttribute('data-virtual-list-item-key') || null,
       count: answers.length,
       userCount: userNodes().length,
       completion: !!complete && !!complete.getClientRects().length,
@@ -141,13 +158,14 @@ export function deepseekDOM(action, config, payload) {
     const ready = inspect().status === 'ready';
     const answers = nodes.map((node, i) => ({
       source: node.querySelector('.ds-assistant-message-main-content') || node,
+      messageKey: node.closest('[data-virtual-list-item-key]')?.getAttribute('data-virtual-list-item-key') || null,
       turn: node,
       copy: all('button,[role=button]', node).find(e => /copy|копировать|复制/i.test(label(e)) || icon(e, 'M6.14929 4.02032')),
       raw: responses([node])[0],
       complete: !!completion(node) && (i < nodes.length - 1 || ready)
     }));
     const context = all('.ds-message').filter(node => !node.querySelector('.ds-assistant-message-main-content'))
-      .filter(node => /^(Режим браузерного агента\.|Исправь предыдущий JSON\.)/.test(node.textContent.trim()))
+      .filter(node => /^(Режим браузерного агента\.|Исправь предыдущий JSON\.|Результат инструмента \()/.test(node.textContent.trim()))
       .map(source => ({
         source,
         turn: source.closest('.ds-virtual-list-visible-items > div') || source,

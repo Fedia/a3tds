@@ -96,7 +96,7 @@ export function pythonHistoryEntry(entry, job) {
     const p = job.progress;
     const progress = typeof p === 'string' ? p : typeof p === 'number' ? String(p) : p && typeof p === 'object' ?
       (Number.isFinite(p.done) && Number.isFinite(p.total) ? `Обработано ${p.done} из ${p.total}` : Object.entries(p).slice(0, 4).map(([k, v]) => `${k}: ${v===null?'—':typeof v==='object'?'…':String(v).slice(0,80)}`).join(' · ')) : '';
-    detail = [pythonPhaseText(job.phase) || 'Python выполняется…', progress, `${job.elapsedSeconds||0} с`].filter(Boolean).join(' · ');
+    detail = [pythonPhaseText(job.phase) || 'Python выполняется…', progress, `${job.status==='running'?Math.floor((Date.now()-job.started)/1000):job.elapsedSeconds||0} с`].filter(Boolean).join(' · ');
   } else if (job.error) detail = shortReason(job.error.message);
   else if (job.exportPending) detail = 'Вычисление завершено; результаты сохранены локально, выгрузка в папку ожидается.';
   else detail = 'Вычисление завершено.' + (job.files?.length ? ` Создано файлов: ${job.files.length}.` : '');
@@ -109,11 +109,14 @@ export function pythonHistoryEntry(entry, job) {
 export function projectHistory(state) {
   const entries = Object.values(state.commands || {}).filter(x => x.command.tool !== 'task.finish').map(({
     command,
-    result
+    result,
+    source
   }) => pythonHistoryEntry({
     hidden: command.tool === 'python.status',
     commandId: command.id,
     key: commandUIKey(command),
+    responseKey: source?.wireKey,
+    messageKey: source?.messageKey,
     description: command.description,
     status: result?.status === 'ok' ? 'ok' : 'error',
     detail: resultText(command, result)
@@ -123,6 +126,8 @@ export function projectHistory(state) {
     hidden: command.tool === 'python.status',
     commandId: command.id,
     key: commandUIKey(command),
+    responseKey: state.pending.source?.wireKey,
+    messageKey: state.pending.source?.messageKey,
     description: command.description,
     status: state.status === 'running' ? 'running' : state.status === 'paused' ? 'paused' : 'interrupted',
     detail: command.tool === 'python.run' ? pythonPhaseText(state.pythonPhase) : ''
@@ -137,6 +142,8 @@ export function projectTask(state) {
     taskId: state.id,
     chatURL: state.modelChatURL,
     commandId: command.id,
+    responseKey: state.commands[state.last.id].source?.wireKey,
+    messageKey: state.commands[state.last.id].source?.messageKey,
     text: command.args.summary
   } : null;
   return {

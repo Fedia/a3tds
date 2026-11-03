@@ -1,4 +1,8 @@
 import {
+  decodeToolResponse,
+  describeTool
+} from './tool-format.js';
+import {
   validateExtractionPlan
 } from './dom-collector.js';
 /**
@@ -19,8 +23,12 @@ import {
   pathParts,
   safeURL
 } from './util.js';
-const s = (max = 20000) => v => typeof v === 'string' && v.length > 0 && v.length <= max;
-const integer = (min, max) => v => Number.isInteger(v) && v >= min && v <= max;
+const s = (max = 20000) => Object.assign(v => typeof v === 'string' && v.length > 0 && v.length <= max, {
+  type: 'string'
+});
+const integer = (min, max) => Object.assign(v => Number.isInteger(v) && v >= min && v <= max, {
+  type: `integer ${min}..${max}`
+});
 const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 export const TOOLS = {
   'browser.open': {
@@ -69,9 +77,9 @@ export const TOOLS = {
     text: v => typeof v === 'string' && v.length <= 200000
   },
   'python.run': {
-    code: s(30000),
-    data: obj
+    code: s(30000)
   },
+  'python.reset': {},
   'python.status': {
     jobId: s(80)
   },
@@ -100,6 +108,7 @@ const OPTIONAL = {
     newTab: v => typeof v === 'boolean'
   },
   'python.run': {
+    data: obj,
     files: Array.isArray
   },
   'python.status': {
@@ -109,23 +118,30 @@ const OPTIONAL = {
     path: v => typeof v === 'string' && v.length < 240
   }
 };
-export function parseCommand(text) {
+export function parseCommand(text, context = {}) {
   assert(typeof text === 'string' && text.length <= 250000, 'Ответ слишком велик');
-  const clean = text.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
-  const c = JSON.parse(clean);
-  assert(obj(c), 'Ожидался объект');
-  assert(Object.keys(c).sort().join(',') === 'args,description,id,tool',
-    'Нужны только id, tool, args, description');
-  assert(s(80)(c.id) && !['__proto__', 'constructor', 'prototype'].includes(c.id) && /^[a-zA-Z0-9_-]+$/.test(c
-    .id), 'Некорректный id');
-  assert(s(400)(c.description) && Object.hasOwn(TOOLS, c.tool) && obj(c.args),
-    'Неизвестный инструмент или описание');
-  const shape = TOOLS[c.tool];
+  const c = decodeToolResponse(text);
+  assert(obj(c), 'Ожидался объект команды');
+  assert(Object.keys(c).every(k => ['id', 'tool', 'args', 'description'].includes(k)), 'Допустимы tool, args, id?, description?');
+  assert(Object.hasOwn(TOOLS, c.tool) && obj(c.args), 'Неизвестный инструмент или args');
+  if (c.id !== undefined && !context.preferContext) assert(s(80)(c.id) && !['__proto__', 'constructor', 'prototype'].includes(c.id) && /^[a-zA-Z0-9_-]+$/.test(c.id), 'Некорректный id');
+  if (c.description !== undefined) assert(s(400)(c.description), 'Некорректное описание');
+  const refCall = ['browser.click', 'browser.type'].includes(c.tool) && Object.hasOwn(c.args, 'ref');
+  const shape = refCall ? (c.tool === 'browser.type' ? {
+    ref: s(100),
+    text: s(5000)
+  } : {
+    ref: s(100)
+  }) : TOOLS[c.tool];
   const optional = OPTIONAL[c.tool] || {};
   assert(Object.keys(c.args).every(k => Object.hasOwn(shape, k) || Object.hasOwn(optional, k)), 'Неверные поля args');
   for (const [k, check] of Object.entries(shape)) assert(check(c.args[k]), 'Неверный аргумент ' + k);
   for (const [k, check] of Object.entries(optional))
     if (Object.hasOwn(c.args, k)) assert(check(c.args[k]), 'Неверный аргумент ' + k);
+  if (c.tool === 'python.run') c.args.data ??= {};
+  if (context.preferContext) c.id = context.id;
+  else c.id ??= context.id;
+  c.description ??= describeTool(c.tool, c.args).slice(0, 400);
   if (c.args.path) pathParts(c.args.path);
   if (c.tool === 'browser.collect') validateExtractionPlan(c.args.plan);
   if (c.tool === 'python.run' && c.args.files) {
@@ -149,9 +165,31 @@ export function parseCommand(text) {
     for (const r of c.args.rows) assert(obj(r) && ['documentId', 'category', 'quote', 'rationale'].every(k =>
       s(8000)(r[k])), 'Неверная строка кодирования');
   }
-  return c;
+  return {
+    id: c.id,
+    tool: c.tool,
+    args: c.args,
+    description: c.description
+  };
 }
-export const protocolHelp = () => JSON.stringify(Object.fromEntries(Object.entries(TOOLS).filter(([k]) => !k
-  .startsWith('corpus.') && k !== 'analysis.save').map(([k, v]) => [k,
-  [...Object.keys(v), ...Object.keys(OPTIONAL[k] || {}).map(name => name + '?')]
+export const protocolHelp = () => JSON.stringify(Object.fromEntries(Object.entries(TOOLS).filter(([k]) => !k.startsWith('corpus.') && k !== 'analysis.save').map(([k, v]) => [k,
+  k === 'browser.click' ? {
+    ref: 'string'
+  } : k === 'browser.type' ? {
+    ref: 'string',
+    text: 'string'
+  } : Object.fromEntries([...Object.entries(v).map(([name, check]) => [name, check.type || ({
+      kind: 'text|links|tables',
+      plan: 'object',
+      text: 'string',
+      path: 'string',
+      rows: 'array'
+    } [name] || 'object')]),
+    ...Object.entries(OPTIONAL[k] || {}).map(([name, check]) => [name + '?', check.type || ({
+      files: '[{path:string,name:string}]',
+      newTab: 'boolean',
+      data: 'object',
+      path: 'string'
+    } [name] || 'object')])
+  ])
 ])));

@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-03",
+  "version": "0.7.0",
+  "realDeepSeekVerified": false,
+  "titaniumDeviceVerified": false,
+  "extensionLoadVerified": false,
+  "environment": "Artificial chat DOM and native Chromium rendering, no live DeepSeek.",
+  "passed": [
+    "identical short commands bind to different native message keys and cannot borrow each other's receipts",
+    "explicit rendered python.run block reconstructed; ordinary Python example stays visible and remains ordinary text",
+    "short final renders from its receipt; JSON code stays readable to adapter after native list remount"
+  ],
+  "controllerChecks": "Short/legacy JSON, explicit Python block, generated exchange ids, replay protection and ref staleness covered by main suite. Typed repair smoke also passed in Node."
+}

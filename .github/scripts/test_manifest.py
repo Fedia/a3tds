@@ -1,49 +1,28 @@
-"""Run with python3 .github/scripts/test_manifest.py; no third-party dependencies."""
+"""Static MV3 Worker/CSP regressions, no third-party dependencies."""
 from copy import deepcopy
 import json
 from pathlib import Path
 import unittest
 from check_manifest import validate_manifest
-
-ROOT = Path(__file__).resolve().parents[2]
-MANIFEST = json.loads((ROOT / 'manifest.json').read_text(encoding='utf-8'))
-
-
+ROOT=Path(__file__).resolve().parents[2]
+MANIFEST=json.loads((ROOT/'manifest.json').read_text(encoding='utf-8'))
 class ManifestTests(unittest.TestCase):
-    def test_current_contract(self):
-        validate_manifest(ROOT, MANIFEST)
-
-    def test_missing_sandbox_html_reproduces_browser_denial(self):
-        m = deepcopy(MANIFEST)
-        for entry in m['web_accessible_resources']:
-            entry['resources'] = [p for p in entry['resources'] if p != 'python-sandbox.html']
-        with self.assertRaisesRegex(ValueError, 'python-sandbox.html'):
-            validate_manifest(ROOT, m)
-
-    def test_missing_sandbox_script(self):
-        m = deepcopy(MANIFEST)
-        for entry in m['web_accessible_resources']:
-            entry['resources'] = [p for p in entry['resources'] if p != 'src/python-sandbox.js']
-        with self.assertRaisesRegex(ValueError, 'src/python-sandbox.js'):
-            validate_manifest(ROOT, m)
-
-    def test_site_only_match_does_not_cover_opaque_python_origin(self):
-        m = deepcopy(MANIFEST)
-        for entry in m['web_accessible_resources']:
-            entry['matches'] = ['https://chat.deepseek.com/*']
-        with self.assertRaisesRegex(ValueError, 'web_accessible_resources'):
-            validate_manifest(ROOT, m)
-
-    def test_public_html_must_still_be_isolated(self):
-        m = deepcopy(MANIFEST)
-        m['sandbox']['pages'] = []
-        with self.assertRaisesRegex(ValueError, 'sandbox page'):
-            validate_manifest(ROOT, m)
-        m = deepcopy(MANIFEST)
-        m['content_security_policy']['sandbox'] += ' allow-same-origin'
-        with self.assertRaisesRegex(ValueError, 'opaque origin'):
-            validate_manifest(ROOT, m)
-
-
-if __name__ == '__main__':
-    unittest.main()
+    def test_current_contract(self):validate_manifest(ROOT,MANIFEST)
+    def test_blob_worker_not_required(self):
+        m=deepcopy(MANIFEST);m['content_security_policy']['extension_pages']=m['content_security_policy']['extension_pages'].replace("worker-src 'self'","worker-src blob:")
+        with self.assertRaisesRegex(ValueError,'worker-src'):validate_manifest(ROOT,m)
+    def test_no_remote_js_or_eval(self):
+        for source in ['https://cdn.jsdelivr.net',"'unsafe-eval'"]:
+            m=deepcopy(MANIFEST);m['content_security_policy']['extension_pages']=m['content_security_policy']['extension_pages'].replace("script-src 'self'", "script-src 'self' "+source)
+            with self.assertRaisesRegex(ValueError,'script-src'):validate_manifest(ROOT,m)
+    def test_worker_cannot_be_loaded_by_sites(self):
+        m=deepcopy(MANIFEST);m['web_accessible_resources'].append({'resources':['src/python-worker.js'],'matches':['<all_urls>']})
+        with self.assertRaisesRegex(ValueError,'private'):validate_manifest(ROOT,m)
+    def test_ui_module_imports_remain_accessible(self):
+        m=deepcopy(MANIFEST)
+        for entry in m['web_accessible_resources']:entry['resources']=[r for r in entry['resources'] if r!='src/tool-format.js']
+        with self.assertRaisesRegex(ValueError,'tool-format.js'):validate_manifest(ROOT,m)
+    def test_no_nested_python_frame(self):
+        m=deepcopy(MANIFEST);m['sandbox']={'pages':['python-sandbox.html']}
+        with self.assertRaisesRegex(ValueError,'sandbox iframe'):validate_manifest(ROOT,m)
+if __name__=='__main__':unittest.main()

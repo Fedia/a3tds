@@ -1,6 +1,6 @@
 {
-  "date": "2026-11-02",
-  "version": "0.6.1",
+  "date": "2026-11-03",
+  "version": "0.7.0",
   "environment": "Chromium Linux, local artificial chat/virtual-list page, mobile viewport 390x844, trusted wheel and CDP touch input. Separate final-view check on private user-supplied DeepSeek DOM export with network blocked.",
   "realDeepSeekVerified": false,
   "titaniumDeviceVerified": false,

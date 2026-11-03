@@ -315,6 +315,8 @@ export class BrowserTools {
       if (generation !== this.generation) throw new Error('Действие остановлено');
       try {
         const data = await this.runOnce(id, op, args);
+        if (op === 'snapshot')
+          for (const element of data.elements) element.ref = `r${id}_${data.snapshot}_${element.id}`;
         if (generation !== this.generation && !reading) throw new Error('Действие остановлено');
         if (reading) {
           if (readiness.url !== data.url || data.documentId && readiness.documentId !== data.documentId) {
@@ -493,7 +495,24 @@ export class BrowserTools {
       navigated: true
     };
   }
+  resolveReference(args) {
+    const match = args.ref?.match(/^r([0-9]+)_([a-f0-9-]{36})_(e[0-9]+)$/);
+    if (!match) {
+      const error = new Error('Устаревший ref: запросите browser.snapshot');
+      error.definite = true;
+      throw error;
+    }
+    return {
+      tabId: Number(match[1]),
+      snapshot: match[2],
+      element: match[3],
+      ...(args.text === undefined ? {} : {
+        text: args.text
+      })
+    };
+  }
   async execute(tool, a, context = {}) {
+    if (a.ref) a = this.resolveReference(a);
     const op = tool.split('.')[1];
     if (op === 'collect') validateExtractionPlan(a.plan);
     if (op === 'open') {
