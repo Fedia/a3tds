@@ -1,11 +1,12 @@
 import {
-  assert,
-  pathParts
+  assert
 } from './util.js';
 
 /** One lazily created, reusable extension Worker. Python shares this extension's origin. */
 export class PythonRuntime {
-  constructor() {
+  constructor(sync) {
+    this.sync = sync;
+    this.writes = Promise.resolve();
     this.startupMs = Infinity;
     this.workerMs = Infinity;
     this.sessionId = null;
@@ -21,19 +22,28 @@ export class PythonRuntime {
     this.chatURL = chatURL;
     this.project = project;
   }
-  async run(code, data = {}, timeMs = null, files = []) {
+  async flush() {
+    const previousError = await this.writes.then(() => null, error => error);
+    await this.sync?.flush();
+    if (previousError && !previousError.staged) throw previousError;
+  }
+  queueChanges(root, operations, onFiles) {
+    // Keep staging later records even if an earlier export needs renewed permission.
+    this.writes = this.writes.catch(() => {}).then(async () => {
+      assert(this.sync, 'Не подключена очередь сохранения проекта');
+      await this.sync.submit(root, operations);
+      await onFiles?.(operations);
+    });
+    this.writes.catch(() => {});
+  }
+  async run(code, timeMs = null) {
     assert(!this.running, 'Python уже выполняется');
-    assert(Array.isArray(files) && files.length <= 20, 'Слишком много входных файлов');
-    let total = 0;
-    const names = [];
-    for (const file of files) {
-      pathParts(file.name);
-      assert(file.bytes instanceof Uint8Array && file.bytes.length <= 10000000, 'Недопустимый входной файл');
-      assert(!names.some(name => name === file.name || name.startsWith(file.name + '/') || file.name.startsWith(name + '/')), 'Конфликт имён входных файлов');
-      names.push(file.name);
-      total += file.bytes.length;
-    }
-    assert(total <= 20000000, 'Входные файлы больше 20 МБ');
+    assert(this.project?.kind === 'directory', 'Выберите папку проекта');
+    assert(typeof code === 'string' && code.trim(), 'Пустой Python-код');
+    const generation = this.generation || 0;
+    await this.flush();
+    assert(generation === (this.generation || 0), 'Запуск Python отменён');
+    assert(!this.running, 'Python уже выполняется');
     const reused = !!this.ready;
     if (!this.worker) {
       this.sessionId = crypto.randomUUID();
@@ -108,12 +118,55 @@ export class PythonRuntime {
         } catch {}
       };
       this.fail = (error, fatal = true) => finish(error, null, fatal);
-      this.receive = message => {
+      let browserBusy = false;
+      this.receive = async message => {
         if (message.fatal && !message.requestId) {
           finish(new Error(message.error), null, true);
           return;
         }
         if (message.requestId !== requestId) return;
+        if (message.type === 'project-change') {
+          this.queueChanges(this.project, message.operations, this.onFiles);
+          return;
+        }
+        if (message.type === 'python-browser') {
+          const worker = this.worker;
+          let reply;
+          if (browserBusy) {
+            worker.postMessage({
+              type: 'browser-result',
+              callId: message.callId,
+              reply: {
+                ok: false,
+                error: 'Параллельные браузерные вызовы не поддерживаются'
+              }
+            });
+            return;
+          }
+          try {
+            browserBusy = true;
+            await this.flush();
+            assert(!settled && this.worker === worker, 'Сценарий остановлен');
+            assert(this.callBrowser, 'Браузер не подключён');
+            reply = {
+              ok: true,
+              data: await this.callBrowser(message.method, message.args, message.callId)
+            };
+          } catch (error) {
+            reply = {
+              ok: false,
+              error: error.message
+            };
+          } finally {
+            browserBusy = false;
+          }
+          if (!settled && this.worker === worker) worker.postMessage({
+            type: 'browser-result',
+            callId: message.callId,
+            reply
+          });
+          return;
+        }
         if (message.type === 'python-progress') {
           progress(message.phase, message.detail);
           return;
@@ -127,27 +180,23 @@ export class PythonRuntime {
           } catch {}
           return;
         }
-        if (!message.ok) {
-          const error = new Error(message.error || 'Python не вернул результат');
-          error.timings = message.timings;
-          error.stdout = message.stdout;
-          error.stderr = message.stderr;
-          this.ready = !message.fatal;
-          finish(error, null, message.fatal);
-          return;
-        }
         try {
-          assert(Array.isArray(message.files) && message.files.length <= 30, 'Некорректный список результатов Python');
-          let bytes = 0;
-          for (const file of message.files) {
-            pathParts(file.path);
-            assert(file.bytes instanceof Uint8Array && file.bytes.length <= 5000000, 'Некорректный выходной файл Python');
-            bytes += file.bytes.length;
+          await this.flush();
+          if (settled) return;
+          if (!message.ok) {
+            const error = new Error(message.error || 'Python не вернул результат');
+            error.timings = message.timings;
+            error.stdout = message.stdout;
+            error.stderr = message.stderr;
+            this.ready = !message.fatal;
+            finish(error, null, message.fatal);
+          } else {
+            assert(typeof message.stdout === 'string' && typeof message.stderr === 'string', 'Некорректный вывод Python');
+            this.ready = true;
+            finish(null, message);
           }
-          assert(bytes <= 20000000 && typeof message.stdout === 'string' && typeof message.stderr === 'string', 'Некорректный вывод Python');
-          this.ready = true;
-          finish(null, message);
         } catch (error) {
+          error.code = 'PROJECT_SYNC_FAILED';
           finish(error, null, true);
         }
       };
@@ -158,21 +207,15 @@ export class PythonRuntime {
           type: 'run',
           requestId,
           code,
-          data,
-          files
-        }, [...new Set(files.map(file => file.bytes.buffer))]);
+          project: this.project
+        });
       } catch (error) {
         finish(error, null, true);
       }
     });
   }
-  acknowledge(requestId) {
-    this.worker?.postMessage({
-      type: 'ack',
-      requestId
-    });
-  }
   reset(reason = 'Python-сессия сброшена') {
+    this.generation = (this.generation || 0) + 1;
     const previousSessionId = this.sessionId;
     this.fail?.(new Error(reason), true);
     this.worker?.terminate();

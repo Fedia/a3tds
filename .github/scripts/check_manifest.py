@@ -14,6 +14,7 @@ def validate_manifest(root, manifest):
     if set(directives.get('script-src',[])) != {"'self'","'wasm-unsafe-eval'"}:
         raise ValueError('script-src must allow local JS and WASM only')
     required=['src/python-runtime.js','src/python-worker.js','src/python-packages.js','src/tool-format.js',
+              'src/python-project.js','src/project-sync.js','src/agent-api.py','src/agent-prompt.js',
               'vendor/pyodide/pyodide.js','vendor/pyodide/pyodide.asm.js','vendor/pyodide/pyodide.asm.wasm',
               'vendor/pyodide/python_stdlib.zip','vendor/pyodide/pyodide-lock.json','vendor/pyodide/PACKAGES.json']
     packages=json.loads((root/'vendor/pyodide/PACKAGES.json').read_text(encoding='utf-8'))

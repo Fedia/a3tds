@@ -1,9 +1,6 @@
 import {
   projectTask
 } from './ui-state.js';
-import {
-  assert
-} from './util.js';
 export class StateStore {
   constructor(name = 'psy-agent') {
     this.name = name;
@@ -38,69 +35,30 @@ export class StateStore {
       tx.onabort = () => reject(tx.error);
     });
   }
-  async putPythonJob(key, record) {
-    const snapshot = {
-      ...record
-    };
-    const outcome = snapshot.outcome;
-    if (outcome) {
-      snapshot.outcomeRef = key + ':output';
-      delete snapshot.outcome;
-    }
-    await new Promise((resolve, reject) => {
-      const tx = this.db.transaction('kv', 'readwrite'),
-        kv = tx.objectStore('kv'),
-        q = kv.get('python-export-queue');
-      q.onsuccess = () => {
-        const queue = q.result || [];
-        if (outcome) kv.put(outcome, snapshot.outcomeRef);
-        kv.put(snapshot, key);
-        kv.put(snapshot.outcomeRef ? [...new Set([...queue, key])] : queue.filter(item => item !== key), 'python-export-queue');
-      };
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
-  }
-  async recordOwnedFile(path, digest) {
-    await new Promise((resolve, reject) => {
-      const tx = this.db.transaction('kv', 'readwrite'),
-        kv = tx.objectStore('kv'),
-        q = kv.get('owned-files');
-      q.onsuccess = () => {
-        const owners = q.result || {};
-        owners[path] = digest;
-        kv.put(owners, 'owned-files');
-      };
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
-  }
-  /** Patch only job metadata/files; a background result must never overwrite a newer task. */
-  async patchPythonJob(taskId, jobId, view, paths = []) {
+  async enqueueProjectChange(record) {
     await new Promise((resolve, reject) => {
       const tx = this.db.transaction('kv', 'readwrite'),
         kv = tx.objectStore('kv');
-      const patch = (key, state) => {
-        if (state?.id === taskId) {
-          state.pythonJobs ??= {};
-          state.pythonJobs[jobId] = view;
-          state.files = [...new Set([...state.files, ...paths])];
-          kv.put(state, key);
-        }
-      };
-      const request = kv.get('task');
-      request.onsuccess = () => {
-        if (request.result?.id === taskId) patch('task', request.result);
-        else {
-          const archived = kv.get('archive-' + taskId);
-          archived.onsuccess = () => patch('archive-' + taskId, archived.result);
-        }
+      const q = kv.get('project-write-queue');
+      q.onsuccess = () => {
+        kv.put(record, 'project-change:' + record.id);
+        kv.put([...(q.result || []), record.id], 'project-write-queue');
       };
       tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    });
+  }
+  async completeProjectChange(id) {
+    await new Promise((resolve, reject) => {
+      const tx = this.db.transaction('kv', 'readwrite'),
+        kv = tx.objectStore('kv');
+      const q = kv.get('project-write-queue');
+      q.onsuccess = () => {
+        kv.put((q.result || []).filter(item => item !== id), 'project-write-queue');
+        kv.delete('project-change:' + id);
+      };
+      tx.oncomplete = resolve;
+      tx.onerror = tx.onabort = () => reject(tx.error);
     });
   }
   async save(s) {
@@ -109,8 +67,7 @@ export class StateStore {
   }
   async saveProjection(s) {
     if (this.name === 'psy-agent') {
-      const summary = projectTask(s),
-        final = summary.final;
+      const summary = projectTask(s);
       const values = {
         summary
       };
@@ -123,17 +80,13 @@ export class StateStore {
           entries: summary.history
         }].slice(-50);
       }
-      if (final) {
-        const previous = (await chrome.storage.local.get('ui-finals'))['ui-finals'] || [];
-        values['ui-finals'] = [...previous.filter(item => item.taskId !== s.id), final].slice(-50);
-      }
       await chrome.storage.local.set(values);
       this.historySignature = historySignature;
     }
   }
   static fresh(task) {
     return {
-      version: 1,
+      version: 2,
       id: crypto.randomUUID(),
       task,
       status: 'paused',
@@ -142,19 +95,16 @@ export class StateStore {
       steps: 0,
       commands: {},
       tabs: [],
-      corpus: [],
       logs: [],
-      prompts: [],
       files: [],
       outbound: null,
       pending: null,
-      last: null,
-      analysis: null
+      last: null
     };
   }
   static recover(s) {
     if (!s) return null;
-    assert(s.version === 1, 'Неизвестная версия состояния');
+    if (s.version !== 2) return null;
     if (s.status === 'stopped') return s;
     if (s.status === 'running' || s.pending || s.outbound) {
       s.status = 'paused';

@@ -1,11 +1,10 @@
-/* Persistent extension Worker: shared Python namespace, no native directory handle passed in. */
+/* Persistent, sequential Python interpreter with a mounted project and browser RPC. */
 self.PSY_BASE = new URL('../', self.location.href).href;
 const nativeFetch = self.fetch.bind(self),
   remoteWheels = new Map(),
-  exported = new Map(),
-  pendingExports = new Map();
-let py, initialization, client, current, packageCount = 0,
-  packagePhase;
+  browserReplies = new Map();
+let py, initialization, client, current, initialized = false, packageCount = 0,
+  packagePhase, project, sequence = 0;
 const send = message => postMessage({
   ...message,
   requestId: current?.id
@@ -121,47 +120,46 @@ async function initialize() {
     stdout: s => output('stdout', s),
     stderr: s => output('stderr', s)
   });
-  py.FS.mkdirTree('/results');
-  py.FS.mkdirTree('/inputs');
-}
-async function collectFiles() {
-  const files = [],
-    pending = [];
-  let bytes = 0;
-  const walk = async path => {
-    for (const name of py.FS.readdir(path)) {
-      if (name === '.' || name === '..') continue;
-      const p = path + '/' + name,
-        st = py.FS.lstat(p);
-      if (py.FS.isLink(st.mode)) throw new Error('Ссылки в результатах Python не поддерживаются');
-      if (py.FS.isDir(st.mode)) {
-        await walk(p);
-        continue;
-      }
-      const content = py.FS.readFile(p),
-        digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', content)), b => b.toString(16).padStart(2, '0')).join('');
-      if (exported.get(p) === digest) continue;
-      bytes += content.length;
-      if (files.length >= 30 || content.length > 5000000 || bytes > 20000000) throw new Error('Лимит файлов Python');
-      files.push({
-        path: p.slice(9),
-        bytes: content
+  const {
+    PythonProject
+  } = await import('./python-project.js');
+  project = new PythonProject(py, operations => {
+    send({
+      type: 'project-change',
+      operations
+    });
+  });
+  const api = await nativeFetch(new URL('src/agent-api.py', self.PSY_BASE)).then(r => r.text());
+  py.globals.set('__agent_api_source', api);
+  py.globals.set('__agent_rpc', async (method, argsJSON) => {
+    project.flush();
+    const callId = ++sequence;
+    return await new Promise(resolve => {
+      browserReplies.set(callId, resolve);
+      send({
+        type: 'python-browser',
+        callId,
+        method,
+        args: JSON.parse(argsJSON)
       });
-      pending.push([p, digest]);
+    });
+  });
+  py.globals.set('__agent_progress', text => {
+    if (current && performance.now() - current.lastProgress >= 250) {
+      phase('running', JSON.parse(String(text)));
+      current.lastProgress = performance.now();
     }
-  };
-  await walk('/results');
-  return {
-    files,
-    pending
-  };
+  });
+  py.runPython("exec(compile(__agent_api_source, '<agent-api>', 'exec'), {'_agent_rpc': __agent_rpc, '_agent_progress': __agent_progress})");
+  py.globals.delete('__agent_api_source');
+  initialized = true;
 }
 onmessage = async ({
   data
 }) => {
-  if (data.type === 'ack') {
-    for (const [path, digest] of pendingExports.get(data.requestId) || []) exported.set(path, digest);
-    pendingExports.delete(data.requestId);
+  if (data.type === 'browser-result') {
+    browserReplies.get(data.callId)?.(JSON.stringify(data.reply));
+    browserReplies.delete(data.callId);
     return;
   }
   if (data.type !== 'run' || current) return;
@@ -177,67 +175,53 @@ onmessage = async ({
   };
   try {
     await (initialization ||= initialize());
+    // Compile BEFORE imports, mount or user side effects; keep top-level await.
+    py.globals.set('__agent_code', data.code);
+    py.runPython("import ast as __agent_ast; compile(__agent_code, '<agent-script>', 'exec', flags=__agent_ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)");
     phase('packages');
     await py.loadPackagesFromImports(data.code);
     phase('inputs');
-    const inputs = Object.create(null);
-    let inputBytes = 0;
-    if ((data.files || []).length > 20) throw new Error('Лимит входных файлов');
-    for (const file of data.files || []) {
-      if (!file.name || file.name.split('/').some(p => !p || p === '.' || p === '..') || file.name.includes('\\')) throw new Error('Недопустимое имя входного файла');
-      inputBytes += file.bytes.length;
-      if (file.bytes.length > 10000000 || inputBytes > 20000000) throw new Error('Лимит входных данных');
-      const path = '/inputs/' + data.requestId + '/' + file.name;
-      py.FS.mkdirTree(path.slice(0, path.lastIndexOf('/')));
-      py.FS.writeFile(path, file.bytes);
-      inputs[file.name] = path;
-    }
-    // Infrastructure lives outside the user's persistent namespace.
-    py.globals.set('__agent_input_json', JSON.stringify(data.data || {}));
-    py.globals.set('__agent_input_paths', JSON.stringify(inputs));
-    py.globals.set('__agent_progress', text => {
-      if (!current) return;
-      if (performance.now() - current.lastProgress >= 250) {
-        phase('running', JSON.parse(String(text)));
-        current.lastProgress = performance.now();
-      }
-    });
+    if (!data.project) throw new Error('Выберите папку проекта');
+    await project.refresh(data.project);
     phase('running');
     await py.runPythonAsync(`
 import json as __agent_json, os as __agent_os
 __agent_os.environ['MPLBACKEND'] = 'Agg'
-__agent_os.chdir('/results')
-data = __agent_json.loads(__agent_input_json)
-inputs = __agent_json.loads(__agent_input_paths)
+__agent_os.chdir('/project')
 result = None
-def progress(value):
-    __agent_progress(__agent_json.dumps(value, ensure_ascii=False, default=str))
+from agent import browser, progress
 `);
-    await py.runPythonAsync(data.code);
-    const result = JSON.parse(await py.runPythonAsync('__agent_json.dumps(result, ensure_ascii=False, allow_nan=False)'));
+    await py.runPythonAsync(data.code, {
+      filename: '<agent-script>'
+    });
+    let result;
+    try {
+      result = JSON.parse(py.runPython('__agent_json.dumps(result, ensure_ascii=False, allow_nan=False)'));
+    } catch (error) {
+      throw new Error('Переменная result должна быть JSON-совместимой: ' + error);
+    }
     phase('exporting');
-    const {
-      files,
-      pending
-    } = await collectFiles();
+    project.flush();
     current.timings[current.phase + 'Ms'] = (current.timings[current.phase + 'Ms'] || 0) + performance.now() - current.phaseAt;
-    postMessage({
-      requestId: current.id,
+    send({
       ok: true,
       stdout: current.stdout,
       stderr: current.stderr,
       stdoutTruncated: !!current.stdoutTruncated,
       stderrTruncated: !!current.stderrTruncated,
       result,
-      files,
       timings: current.timings
-    }, files.map(file => file.bytes.buffer));
-    pendingExports.set(data.requestId, pending);
+    });
   } catch (error) {
+    try {
+      project?.flush();
+    } catch (syncError) {
+      error = new Error(String(error) + '\nСохранение: ' + syncError);
+    }
     current.timings[current.phase + 'Ms'] = (current.timings[current.phase + 'Ms'] || 0) + performance.now() - current.phaseAt;
     send({
       ok: false,
-      fatal: !py,
+      fatal: !initialized || current.phase === 'inputs',
       error: String(error),
       stdout: current.stdout,
       stderr: current.stderr,

@@ -13,7 +13,6 @@ from './chat-dom.js';
 export class DeepSeekAdapter {
   constructor(store) {
     this.store = store;
-    this.protocolVersion = 2;
     this.abort = false;
     this.waitMs = 180000;
     this.idleMs = 45000;

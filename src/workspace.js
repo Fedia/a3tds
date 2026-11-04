@@ -49,14 +49,11 @@ async function idle() {
   const {
     summary
   } = await chrome.storage.local.get('summary');
-  if (summary?.status === 'running') assert(!(await command('status')).active, 'Сначала остановите агента в чате');
-  const task = await store.get('task');
-  if (Object.values(task?.pythonJobs || {}).some(job => job.status === 'running' || job.exportPending)) {
-    const owner = available.find(tab => tab.id === task.modelTabId);
-    if (owner) assert(!(await command('status', {
-      tabId: owner.id
-    })).computing, 'Сначала остановите Python переключателем «Агент» в чате');
+  if (selected && ['running', 'paused'].includes(summary?.status)) {
+    const status = await command('status');
+    assert(!status.active && !status.computing, 'Сначала остановите агента в чате');
   }
+
 }
 async function tabs() {
   available = await chrome.tabs.query({
@@ -130,7 +127,7 @@ async function render() {
     const li = document.createElement('li'),
       name = document.createElement('span'),
       button = document.createElement('button');
-    name.textContent = path.split('/').slice(2).join('/') || path;
+    name.textContent = path;
     name.title = path;
     button.textContent = 'Скачать';
     button.setAttribute('aria-label', 'Скачать ' + name.textContent);

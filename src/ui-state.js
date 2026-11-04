@@ -24,13 +24,11 @@ export function shortReason(reason = '') {
 }
 export function pythonPhaseText(phase) {
   return {
-    queued: 'Python ожидает запуска…',
-    sandbox: 'Подготавливаю среду Python…',
     worker: 'Запускаю Python…',
     bootstrap: 'Загружаю файлы Python…',
     runtime: 'Загружаю интерпретатор Python…',
     packages: 'Подготавливаю нужные библиотеки…',
-    inputs: 'Передаю данные в Python…',
+    inputs: 'Подключаю папку проекта…',
     running: 'Выполняю Python-код…',
     exporting: 'Собираю результаты Python…'
   } [phase] || '';
@@ -39,7 +37,7 @@ export function progressText(state) {
   if (!state) return '';
   if (state.status === 'paused') return 'Пауза. ' + shortReason(state.message || state.reason);
   if (state.status !== 'running') return '';
-  const saved = state.savedFiles ? `Сохранено файлов: ${state.savedFiles} · ` : state.savedPages ? `Сохранено страниц: ${state.savedPages} · ` : '';
+  const saved = state.savedFiles ? `Сохранено файлов: ${state.savedFiles} · ` : '';
   const waiting = {
     sending: 'Передаю результаты в DeepSeek…',
     waiting: 'Жду ответ DeepSeek…',
@@ -56,110 +54,68 @@ export function belongsToChat(state, url, tabId) {
   return state.status === 'running' && ['/', '/a/chat', '/a/chat/'].includes(new URL(state.ownerURL).pathname);
 }
 
-/** Correlate a DOM command with its local receipt; not an execution authorization. */
-export function commandUIKey(command) {
-  const text = JSON.stringify([command.id, command.tool, command.args, command.description]);
-  let digest = 2166136261;
-  for (let i = 0; i < text.length; i++) digest = Math.imul(digest ^ text.charCodeAt(i), 16777619);
-  return command.id + ':' + text.length + ':' + (digest >>> 0).toString(36);
-}
-
-function resultText(command, result) {
-  if (result?.status === 'error') return shortReason(result.error?.message || 'Действие не удалось.');
-  const d = result?.data || {},
-    p = d.page || d;
-  if (command.tool === 'browser.collect') return `Собрано записей: ${p.savedRecords ?? p.records?.length ?? 0}.`;
-  if (command.tool === 'browser.extract') {
-    const kind = p.kind || command.args.kind;
-    return kind === 'text' ? 'Текст страницы собран и сохранён.' : kind === 'links' ? 'Ссылки собраны и сохранены.' : 'Таблицы собраны и сохранены.';
+/** Execution receipts, not model prose, determine history status. */
+function displayProgress(value) {
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return value; }
   }
-  if (command.tool === 'browser.open') return p.title ? 'Открыта страница: ' + p.title.slice(0, 160) : 'Страница открыта.';
-  if (command.tool === 'browser.snapshot') return 'Страница прочитана, копия сохранена.';
-  if (command.tool === 'browser.inspect') return 'Структура страницы прочитана.';
-  if (command.tool === 'files.write') return 'Сохранён файл: ' + (d.path || command.args.path).split('/').at(-1);
-  if (command.tool === 'files.list') return `Найдено файлов и папок: ${d.entries?.length || 0}.`;
-  if (command.tool === 'files.read') return 'Файл прочитан.';
-  if (command.tool === 'python.run') return 'Вычисление завершено.' + (d.files?.length ? ` Создано файлов: ${d.files.length}.` : '');
-  return 'Действие выполнено.';
-}
-export function pythonHistoryEntry(entry, job) {
-  if (!job) return entry;
-  const status = {
-    running: 'running',
-    completed: 'ok',
-    failed: 'error',
-    cancelled: 'interrupted',
-    interrupted: 'interrupted'
-  } [job.status] || 'running';
-  let detail = '';
-  if (status === 'running') {
-    const p = job.progress;
-    const progress = typeof p === 'string' ? p : typeof p === 'number' ? String(p) : p && typeof p === 'object' ?
-      (Number.isFinite(p.done) && Number.isFinite(p.total) ? `Обработано ${p.done} из ${p.total}` : Object.entries(p).slice(0, 4).map(([k, v]) => `${k}: ${v===null?'—':typeof v==='object'?'…':String(v).slice(0,80)}`).join(' · ')) : '';
-    detail = [pythonPhaseText(job.phase) || 'Python выполняется…', progress, `${job.status==='running'?Math.floor((Date.now()-job.started)/1000):job.elapsedSeconds||0} с`].filter(Boolean).join(' · ');
-  } else if (job.error) detail = shortReason(job.error.message);
-  else if (job.exportPending) detail = 'Вычисление завершено; результаты сохранены локально, выгрузка в папку ожидается.';
-  else detail = 'Вычисление завершено.' + (job.files?.length ? ` Создано файлов: ${job.files.length}.` : '');
-  return {
-    ...entry,
-    status,
-    detail
-  };
+  if (value && typeof value === 'object') {
+    if (Number.isFinite(value.done) && Number.isFinite(value.total)) return `Обработано ${value.done} из ${value.total}`;
+    return Object.entries(value).slice(0, 4).map(([key, item]) => `${key}: ${String(item).slice(0, 120)}`).join(' · ');
+  }
+  return String(value ?? '');
 }
 export function projectHistory(state) {
-  const entries = Object.values(state.commands || {}).filter(x => x.command.tool !== 'task.finish').map(({
-    command,
-    result,
-    source
-  }) => pythonHistoryEntry({
-    hidden: command.tool === 'python.status',
-    commandId: command.id,
-    key: commandUIKey(command),
-    responseKey: source?.wireKey,
-    messageKey: source?.messageKey,
-    description: command.description,
-    status: result?.status === 'ok' ? 'ok' : 'error',
-    detail: resultText(command, result)
-  }, state.pythonJobs?.[command.id]));
-  const command = state.pending?.command;
-  if (command && command.tool !== 'task.finish' && !state.commands?.[command.id]) entries.push(pythonHistoryEntry({
-    hidden: command.tool === 'python.status',
-    commandId: command.id,
-    key: commandUIKey(command),
-    responseKey: state.pending.source?.wireKey,
-    messageKey: state.pending.source?.messageKey,
-    description: command.description,
-    status: state.status === 'running' ? 'running' : state.status === 'paused' ? 'paused' : 'interrupted',
-    detail: command.tool === 'python.run' ? pythonPhaseText(state.pythonPhase) : ''
-  }, state.pythonJobs?.[command.id]));
-  return entries;
+  const entries = Object.values(state.commands || {});
+  if (state.pending && !state.commands[state.pending.command.id]) entries.push(state.pending);
+  return entries.map(entry => {
+    const {
+      command,
+      result,
+      source
+    } = entry;
+    const status = result ? result.status : state.status === 'running' ? 'running' : state.status === 'paused' ? 'paused' : 'interrupted';
+    const activity = entry.activity || [];
+    const details = [...(activity.length > 20 ? [`Предыдущих действий: ${activity.length - 20}`] : []), ...activity.slice(-20)];
+    if (!result) {
+      if (entry.progress) details.push(displayProgress(entry.progress).slice(-1000));
+      if (entry.output) details.push(entry.output.slice(-2000));
+    } else if (result.status === 'error') details.push(result.error?.message?.slice(-2500) || 'Сценарий прерван');
+    else details.push(result.data?.stdout?.slice(-2000) || 'Сценарий выполнен, файлы сохранены.');
+    return {
+      commandId: command.id,
+      key: command.id,
+      responseKey: source?.wireKey,
+      messageKey: source?.messageKey,
+      description: command.description,
+      status,
+      detail: details.join('\n')
+    };
+  });
 }
 
-/** Safe UI projection; a final is accepted only after a successful task.finish command. */
 export function projectTask(state) {
-  const command = state.last && state.commands?.[state.last.id]?.command;
-  const final = state.status === 'completed' && state.last?.status === 'ok' && command?.tool === 'task.finish' ? {
-    taskId: state.id,
-    chatURL: state.modelChatURL,
-    commandId: command.id,
-    responseKey: state.commands[state.last.id].source?.wireKey,
-    messageKey: state.commands[state.last.id].source?.messageKey,
-    text: command.args.summary
-  } : null;
   return {
     taskId: state.id,
     status: state.status,
     phase: state.phase,
     waitElapsed: state.waitElapsed || 0,
-    pythonPhase: state.pending?.command.tool === 'python.run' ? state.pythonPhase : null,
+    pythonPhase: state.pending ? state.pythonPhase : null,
     history: projectHistory(state),
     current: state.current || '',
     message: state.reason || state.current || '',
     updated: Date.now(),
     files: state.files,
-    savedFiles: state.captures?.length || 0,
+    savedFiles: state.files.length,
     ownerTabId: state.modelTabId,
     ownerURL: state.modelChatURL,
-    final
+    final: state.status === 'completed' && state.final ? {
+      taskId: state.id,
+      chatURL: state.modelChatURL,
+      commandId: state.final.id,
+      responseKey: state.final.source?.wireKey,
+      messageKey: state.final.source?.messageKey,
+      text: state.final.text
+    } : null
   };
 }

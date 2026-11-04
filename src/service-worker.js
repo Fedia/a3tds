@@ -53,7 +53,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     return true;
   }
   const allowedChat = ['chat-ready', 'chat-task', 'chat-stop', 'engine-ping'];
-  const allowedSettings = ['status', 'export-file', 'reconcile', 'recover-send', 'resume',
+  const allowedSettings = ['status', 'export-file', 'resume',
     'reset-tabs'
   ];
   let targetTabId, command;

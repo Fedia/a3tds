@@ -67,10 +67,8 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    document.querySelector('#send').onclick=()=>{
     const prompt=document.querySelector('#composer').value;document.querySelector('#composer').value='';const stop=document.createElement('button');stop.setAttribute('aria-label','Stop generating');document.body.append(stop);
     setTimeout(()=>{n++;const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';
-     let state={};try{state=JSON.parse(prompt.split('Состояние: ')[1].split('\\n')[0])}catch{};
-     if(prompt.startsWith('Результат инструмента'))try{state.last=JSON.parse(prompt.slice(prompt.indexOf(': ')+2,prompt.indexOf('\\n')))}catch{};
-     const command=n===1?{id:'py',tool:'python.run',args:{code:'result = {"sum": sum(data["values"])}',data:{values:[1,2,3]}},description:'Сумма'}:state.last?.data?.result?.sum!==6?{id:'status-'+n,tool:'python.status',args:{jobId:state.pythonJobs?.find(j=>j.status==='running')?.jobId||state.last?.data?.jobId,waitMs:15000},description:'Проверить вычисление'}:{id:'finish',tool:'task.finish',args:{summary:'Сумма равна 6'},description:'Готово'};
-     answer.append(document.createTextNode(JSON.stringify(command)));const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');copy.textContent='Copy';answer.append(copy);document.querySelector('#answers').append(answer);stop.remove();
+     answer.textContent=n===1?'```python\\nimport json\\nfrom pathlib import Path\\nresult={"sum":sum([1,2,3])}\\nPath("result.json").write_text(json.dumps(result))\\n```':'Сумма равна 6';
+     const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');copy.textContent='Copy';answer.append(copy);document.querySelector('#answers').append(answer);stop.remove();
     },100);
    };
   }''')
@@ -98,15 +96,14 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
    await asyncio.sleep(.3)
   summary=shared.get('summary',{});print('SUMMARY',summary,flush=True)
   assert summary.get('status')=='completed',await chat.evaluate('window.lastAlert')
-  result_path=next(path for path in summary['files'] if '/python-result-' in path and path.endswith('.json'))
+  result_path='result.json';assert result_path in summary['files']
   assert await frame.evaluate("""async()=>{
     const {StateStore}=await import('./src/state-store.js'); const store=await new StateStore().init();
     const old=await store.get('archive-'+oldTaskId); const current=await store.get('task');
     return !!old.pending && !!old.outbound && current.id!==old.id && !current.commands['old-command'];
   }""")
-  assert await chat.locator('.answer').count()>=3
-  await chat.wait_for_selector('.psy-agent-final')
-  assert await chat.locator('.psy-agent-final').inner_text() == 'Сумма равна 6'
+  assert await chat.locator('.answer').count()>=2
+  assert (await chat.locator('.answer').last.inner_text()).startswith('Сумма равна 6')
   await chat.wait_for_selector('.psy-agent-step')
   assert 'Готово' in await chat.locator('.psy-agent-step').first.inner_text()
   frame=next(f for f in chat.frames if f.url==EXT+'executor.html')
@@ -115,21 +112,21 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
     const parts=path.split('/'); for(const part of parts.slice(0,-1))d=await d.getDirectoryHandle(part);
     return JSON.parse(await(await(await d.getFileHandle(parts.at(-1))).getFile()).text());
   }""",result_path)
-  assert result['result']['sum']==6
+  assert result['sum']==6
   settings=await context.new_page();pages[2]=settings;await settings.goto(EXT+'workspace.html')
   await settings.locator('#files-toggle').click();await settings.wait_for_selector('#files button')
   assert await settings.evaluate('document.documentElement.scrollWidth <= innerWidth')
   async with settings.expect_download() as pending:
    await settings.locator('#files li').filter(has_text=Path(result_path).name).locator('button').click()
   download=await pending.value;await download.save_as(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json'))
-  assert json.load(open(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json')))['result']['sum']==6
+  assert json.load(open(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json')) )['sum']==6
   await settings.close()
   await frame.evaluate("""async()=>{
     const {PythonRuntime}=await import('/src/python-runtime.js');window.originalReset=PythonRuntime.prototype.reset;
     window.sessionReleased=null;PythonRuntime.prototype.reset=function(reason){const wasReady=this.ready,wasRunning=this.running;const value=originalReset.call(this,reason);window.sessionReleased={reason,wasReady,wasRunning,workerGone:!this.worker};return value;};
   }""")
   other=await context.new_page();pages[3]=other;await other.goto(CHAT+'fixtures/chat.html')
-  await other.evaluate("""()=>{document.querySelector('#send').onclick=()=>{document.querySelector('#composer').value='';const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';answer.textContent=JSON.stringify({tool:'task.finish',args:{summary:'Другой чат готов'}});const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');answer.append(copy);document.querySelector('#answers').append(answer);};}""")
+  await other.evaluate("""()=>{document.querySelector('#send').onclick=()=>{document.querySelector('#composer').value='';const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';answer.textContent='Другой чат готов';const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');answer.append(copy);document.querySelector('#answers').append(answer);};}""")
   await other.add_script_tag(url=EXT+'src/chat-ui.js');await other.wait_for_function("()=>window.testShadow?.host.isConnected && typeof testShadow.querySelector('input')?.onchange==='function'")
   await other.evaluate("testShadow.querySelector('input').click()")
   await other.wait_for_function("()=>Object.hasOwn(window,'readyReply')")
@@ -144,17 +141,13 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await other.close();pages.pop(3)
   print('PASS: new task in another chat releases the previous idle Python session through authenticated service-worker routing',flush=True)
   assert await chat.evaluate("chrome.runtime.sendMessage({type:'executor-command',targetTabId:1,command:'cancel-send'})") is None
-  await chat.evaluate("""()=>{document.querySelector('#send').onclick=()=>{document.querySelector('#composer').value='';const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';answer.textContent=JSON.stringify({id:'loop',tool:'python.run',args:{code:'while True: pass',data:{}},description:'loop'});const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');answer.append(copy);document.querySelector('#answers').append(answer);};}""")
+  await chat.evaluate("""()=>{document.querySelector('#send').onclick=()=>{document.querySelector('#composer').value='';const answer=document.createElement('div');answer.className='answer';answer.dataset.messageAuthorRole='assistant';answer.textContent='```python\\nwhile True: pass\\n```';const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');answer.append(copy);document.querySelector('#answers').append(answer);};}""")
   await chat.locator('#composer').fill('Бесконечный цикл для проверки остановки');await chat.locator('#send').tap()
   for i in range(80):
-   if shared.get('summary',{}).get('message')=='loop':break
+   if shared.get('summary',{}).get('pythonPhase')=='running':break
    await asyncio.sleep(.2)
-  assert shared['summary']['message']=='loop'
-  for i in range(100):
-   if shared.get('summary',{}).get('status')=='paused':break
-   await asyncio.sleep(.2)
-  assert shared['summary']['status']=='paused',shared['summary']
-  await asyncio.sleep(.2)
+  assert shared['summary']['pythonPhase']=='running'
+  assert shared['summary']['status']=='running'
   await frame.evaluate("window.testRuntimeToken='unchanged'")
   await chat.evaluate("const h=document.createElement('header');h.className='the-header';document.body.prepend(h)")
   await chat.wait_for_timeout(300)
@@ -168,7 +161,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await chat.evaluate("""() => { document.querySelector('#send').onclick=()=>{
     document.querySelector('#composer').value=''; const answer=document.createElement('div');
     answer.className='answer';answer.dataset.messageAuthorRole='assistant';
-    answer.textContent=JSON.stringify({id:'resumed-finish',tool:'task.finish',args:{summary:'Продолжено без повторного вычисления'},description:'Готово'});
+    answer.textContent='Продолжено без повторного вычисления';
     const copy=document.createElement('button');copy.className='complete';copy.setAttribute('aria-label','Copy');answer.append(copy);
     document.querySelector('#answers').append(answer);
   }}""")
@@ -180,7 +173,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   assert shared['summary']['status']=='completed',shared['summary']
   assert await frame.evaluate("""async expected=>{
     const {StateStore}=await import('./src/state-store.js'); const s=await(await new StateStore().init()).get('task');
-    const operation=Object.values(s.commands).find(entry=>entry.command.description==='loop'&&entry.result.status==='ok');return s.id===expected && !!operation && s.pythonJobs[operation.command.id].status==='cancelled' && !s.pending;
+    const operation=Object.values(s.commands).find(entry=>entry.result.error?.code==='SCRIPT_INTERRUPTED');return s.id===expected && !!operation && !s.pending;
   }""",old_id)
   print('PASS: continue in chat restores the same stopped task, seals old Python outcome, and finishes without settings',flush=True)
   print('PASS: internal file download, denied direct executor message, stop through chat toggle',flush=True)

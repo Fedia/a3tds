@@ -2,7 +2,7 @@ export function assert(ok, message) {
   if (!ok) throw new Error(message);
 }
 export function pathParts(path) {
-  assert(typeof path === 'string' && path.length > 0 && path.length < 240, 'Некорректный путь');
+  assert(typeof path === 'string' && path.length > 0 && path.length <= 4096, 'Некорректный путь');
   const p = path.split('/');
   assert(p.every(x => x && x !== '.' && x !== '..' && !/[\\:\x00-\x1f<>"|?*]/.test(x) && !/[. ]$/.test(x) && !
     /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(x)), 'Путь вне папки или недопустимое имя');
@@ -30,7 +30,7 @@ export function bounded(value, max = 14000) {
   return {
     truncated: true,
     totalCharacters: text.length,
-    reason: 'Полные данные сохранены локально; запросите files.read с offset/limit либо corpus.read.',
+    reason: 'Вывод усечён. Переменные остаются в Python-сессии; прочитай нужные фрагменты в Python. Полные файлы остаются в /project.',
     preview: text.slice(0, max)
   };
 }

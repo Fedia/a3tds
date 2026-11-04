@@ -8,8 +8,7 @@ document.querySelector('#send').onclick = () => {
     const e = document.createElement('div');
     e.className = 'answer';
     e.dataset.messageAuthorRole = 'assistant';
-    e.textContent =
-      '{"id":"fixture-final","tool":"task.finish","args":{"summary":"Fixture complete"},"description":"Завершение"}';
+    e.textContent = 'Тестовый ответ завершён.';
     document.querySelector('#answers').append(e);
     stop.remove();
     const done = document.createElement('button');

@@ -48,7 +48,7 @@ async def main():
     const primary=document.querySelector('.ds-button--primary.ds-button--circle');
     const arrow=primary.querySelector('path').getAttribute('d');
     const body=document.querySelector('.ds-assistant-message-main-content');
-    const next=JSON.stringify({id:'virtualized-next',tool:'task.finish',args:{summary:'ok'},description:'ok'});
+    const next='Готовый ответ нового сообщения';
     const input=document.querySelector('textarea'); input.value='';
     input.addEventListener('input',()=>primary.classList.remove('ds-button--disabled'));
     primary.onclick=()=>{

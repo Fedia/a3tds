@@ -17,35 +17,34 @@ async def main():
     const {mountChatScroll}=await import('/src/chat-scroll.js');
     const {mountFinalAnswers}=await import('/src/final-view.js');
     const {deepseekDOM}=await import('/src/chat-dom.js');
-    const {commandUIKey}=await import('/src/ui-state.js');
+    const {responseUIKey}=await import('/src/tool-format.js');
     window.deepseekDOM=deepseekDOM;
     document.body.innerHTML='<style>body{margin:0} .ds-virtual-list{height:400px;overflow:auto;overflow-anchor:none} .ds-message{white-space:pre-wrap} [role=button],button{min-height:24px}</style><div class="ds-virtual-list"><div class="ds-virtual-list-items" style="min-height:2400px"><div class="ds-virtual-list-visible-items"></div></div></div><textarea></textarea><button aria-label="Send">Send</button>';
     const rows=document.querySelector('.ds-virtual-list-visible-items');
     for(let i=0;i<15;i++){const row=document.createElement('div');row.dataset.virtualListItemKey='old-'+i;row.style.height='120px';row.textContent='История '+i;rows.append(row);}
     const context=document.createElement('div');context.id='context';context.dataset.virtualListItemKey='context';context.style.minHeight='700px';
     context.innerHTML='<div class="ds-message"></div><div class="native-tools"><button>Copy</button><button>Edit</button></div>';
-    context.firstChild.textContent='Режим браузерного агента.\\nЗадача: Собрать данные\\nОтвет — JSON\\n'+'инструменты '.repeat(200)+'\\nСостояние: {"steps":0,"last":null}';rows.append(context);
-    const commands=[{id:'python',tool:'python.run',args:{code:'print(42)\\n'.repeat(200),data:{}},description:'Вычислить результат'},
-      {id:'status',tool:'python.status',args:{jobId:'python'},description:'Проверить вычисление'},
-      {id:'finish',tool:'task.finish',args:{summary:'Ответ: 42'},description:'Готово'}];
-    for(const command of commands){const row=document.createElement('div');row.id=command.id;row.dataset.virtualListItemKey=command.id;row.style.minHeight='800px';row.innerHTML='<div class="ds-message"><div class="ds-assistant-message-main-content"></div></div><button aria-label="Copy">Copy</button>';row.querySelector('.ds-assistant-message-main-content').textContent=JSON.stringify(command);rows.append(row);}
-    window.historyEntries=[{key:commandUIKey(commands[0]),description:commands[0].description,status:'ok',detail:'Вычисление завершено.'},{key:commandUIKey(commands[1]),hidden:true,status:'ok'}];
+    context.firstChild.textContent='Режим Python-агента.\\nЗадача: Собрать данные\\nКонец задачи.\\n'+'инструменты '.repeat(200)+'\\nСостояние: {"steps":0,"last":null}';rows.append(context);
+    const commands=[{id:'python',raw:'```python\\n'+'print(42)\\n'.repeat(200)+'```',description:'Вычислить результат'},
+      {id:'finish',raw:'Ответ: 42',description:'Готово'}];
+    for(const command of commands){const row=document.createElement('div');row.id=command.id;row.dataset.virtualListItemKey=command.id;row.style.minHeight=command.id==='finish'?'0':'800px';row.innerHTML='<div class="ds-message"><div class="ds-assistant-message-main-content"></div></div><button aria-label="Copy">Copy</button>';row.querySelector('.ds-assistant-message-main-content').textContent=command.raw;rows.append(row);}
+    window.historyEntries=[{responseKey:responseUIKey(commands[0].raw),messageKey:'python',description:commands[0].description,status:'ok',detail:'Вычисление завершено.'}];
     window.scrollControl=mountChatScroll();
     window.view=mountFinalAnswers(()=>deepseekDOM('answer-elements'),{getHistory:()=>historyEntries,getFinals:()=>[{commandId:'finish',text:'Ответ: 42'}],preserveScroll:work=>scrollControl.guard.preserve(work)});
     window.list=document.querySelector('.ds-virtual-list');
     window.rawBefore=deepseekDOM('inspect').answer;
   }''')
   await page.wait_for_timeout(150)
-  heights=await page.evaluate("Object.fromEntries(['context','python','status','finish'].map(id=>[id,document.getElementById(id).getBoundingClientRect().height]))")
-  assert heights['context']<100 and heights['python']<150 and heights['status']==0 and heights['finish']<100,heights
+  heights=await page.evaluate("Object.fromEntries(['context','python','finish'].map(id=>[id,document.getElementById(id).getBoundingClientRect().height]))")
+  assert heights['context']<100 and heights['python']<150 and heights['finish']<100,heights
   assert await page.evaluate("document.querySelector('.ds-virtual-list-items').style.minHeight==='2400px'")
   assert await page.evaluate("deepseekDOM('inspect').answer===rawBefore && deepseekDOM('inspect').completion")
   assert await page.locator('#context .native-tools').evaluate('e=>e.getBoundingClientRect().height')==0
-  print('PASS: accepted protocol rows lose reserved height; hidden polling row and context toolbar collapse; virtual spacer and raw adapter answer remain intact',flush=True)
+  print('PASS: accepted protocol rows lose reserved height; context toolbar collapses; virtual spacer and raw adapter answer remain intact',flush=True)
   await page.evaluate('''()=>{window.card=document.querySelector('.psy-agent-step');window.rawStyleChanges=0;const raw=document.querySelector('#python .ds-assistant-message-main-content');window.tracker=new MutationObserver(records=>rawStyleChanges+=records.length);tracker.observe(raw,{attributes:true,attributeFilter:['style']});for(let i=0;i<10;i++){historyEntries[0].detail='Обработано '+i;view.refresh();}}''')
   await page.wait_for_timeout(200)
   assert await page.evaluate("card===document.querySelector('.psy-agent-step') && rawStyleChanges===0")
-  print('PASS: progress refresh updates the same card without restoring full JSON geometry',flush=True)
+  print('PASS: progress refresh updates the same card without restoring full code geometry',flush=True)
   await page.evaluate("list.scrollTop=list.scrollHeight")
   await page.mouse.move(180,180);await page.mouse.wheel(0,-300);await page.wait_for_timeout(150)
   assert await page.evaluate('scrollControl.guard.reading')

@@ -37,11 +37,11 @@ async def main():
   for host in ['pypi.org','files.pythonhosted.org','cdn.jsdelivr.net']:
    await page.context.route('https://'+host+'/**',remote)
   await page.goto(BASE+'fixtures/article.html')
-  await page.evaluate("""async()=>{const {PythonRuntime}=await import('/src/python-runtime.js');window.python=new PythonRuntime();window.progress=[];python.onProgress=(phase,detail)=>progress.push({phase,detail});window.run=async(...args)=>{const r=await python.run(...args);python.acknowledge(r.requestId);return r};}""")
+  await page.evaluate("""async()=>{const {PythonRuntime}=await import('/src/python-runtime.js');const {StateStore}=await import('/src/state-store.js');const {ProjectSync}=await import('/src/project-sync.js');const store=await new StateStore('packages').init();window.python=new PythonRuntime(new ProjectSync(store));window.root=await navigator.storage.getDirectory();python.project=root;window.progress=[];python.onProgress=(phase,detail)=>progress.push({phase,detail});window.run=async(...args)=>{return await python.run(...args)};}""")
   result=await page.evaluate('''run(`import micropip
 await micropip.install("python-slugify==8.0.4")
 from slugify import slugify
-result = {"slug": slugify("Привет, мир!"), "has_dependency": __import__("text_unidecode").unidecode("мир")}`,{},null)''')
+result = {"slug": slugify("Привет, мир!"), "has_dependency": __import__("text_unidecode").unidecode("мир")}`)''')
   assert result['result']['slug']=='privet-mir' and result['result']['has_dependency']=='mir',result
   assert any('/simple/python-slugify/' in url for url in requests) and any('python_slugify-8.0.4' in url for url in requests),requests
   assert any('text_unidecode' in url for url in requests),requests
@@ -51,13 +51,13 @@ await micropip.install("wordcloud==1.9.3")
 from wordcloud import WordCloud
 wc = WordCloud(width=200, height=100, background_color="white").generate("данные данные исследование студент")
 wc.to_file("cloud.png")
-result={"words":len(wc.words_)}`,{},null)''')
-  raw=result['files'][0]['bytes'];first=raw.get('0') if isinstance(raw,dict) else raw[0]
+result={"words":len(wc.words_)}`)''')
+  first=await page.evaluate("async()=>new Uint8Array(await(await(await root.getFileHandle('cloud.png')).getFile()).arrayBuffer())[0]")
   assert result['result']['words']==3 and first==137,result
   assert any('/pyodide/v0.27.7/full/wordcloud-' in url for url in requests),requests
   print('PASS: compiled wordcloud for the pinned Pyodide ABI loads from CDN, uses local matplotlib and creates PNG',flush=True)
   count=len(requests)
-  warm=await page.evaluate("run('result=len(wc.words_)',{},null)")
+  warm=await page.evaluate("run('result=len(wc.words_)')")
   assert warm['result']==3 and warm['sessionReused'] and len(requests)==count
   print('PASS: wordcloud remains installed and its object survives; warm run makes no package requests',flush=True)
   result=await page.evaluate('''run(`from pyodide.http import pyfetch
@@ -68,7 +68,7 @@ for url, kwargs in [("https://pypi.org/simple/emoji/?secret=data",{}),("https://
         blocked.append(False)
     except Exception:
         blocked.append(True)
-result={"blocked":blocked}`,{},null)''')
+result={"blocked":blocked}`)''')
   assert all(result['result']['blocked']) and len(requests)==count,(result,requests[count:])
   print('PASS: query payload, remote JS and POST blocked before outgoing network requests',flush=True)
   assert any('Загрузка ' in (item.get('detail') or '') for item in await page.evaluate('progress'))
@@ -78,7 +78,7 @@ result={"blocked":blocked}`,{},null)''')
    try:await route.abort()
    except Exception:pass
   await page.context.route('https://pypi.org/simple/agent-cancel-fixture/',hold)
-  await page.evaluate('''()=>{window.pending=python.run("from pyodide.http import pyfetch\\nawait pyfetch('https://pypi.org/simple/agent-cancel-fixture/')",{},null).then(()=>({cancelled:false}),e=>({cancelled:e.message.includes('прерван')}));}''')
+  await page.evaluate('''()=>{window.pending=python.run("from pyodide.http import pyfetch\\nawait pyfetch('https://pypi.org/simple/agent-cancel-fixture/')").then(()=>({cancelled:false}),e=>({cancelled:e.message.includes('прерван')}));}''')
   await asyncio.wait_for(waiting.wait(),30)
   await page.evaluate('python.cancel()')
   assert (await page.evaluate('pending'))['cancelled'] and await page.evaluate('!python.worker')

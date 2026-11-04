@@ -44,7 +44,7 @@ async def main():
    assert await target.evaluate('document.readyState === "interactive"'), 'Must not wait for window.load or unrelated network activity'
    assert result['readiness']['stableMs']>=1000
    action=await host.evaluate("""async()=>{
-     const snapshot=await tools.run(1,'snapshot');const button=snapshot.elements.find(e=>e.label==='Обновить');
+     const snapshot=await tools.run(1,'snapshot',{selector:'body'});const button=snapshot.elements.find(e=>e.label==='Обновить');
      return tools.execute('browser.click',{tabId:1,snapshot:snapshot.snapshot,element:button.id});
    }""")
    assert action['readiness']['ready'] and action['requiresSnapshot'],action
@@ -80,25 +80,22 @@ async def main():
    assert state['ready'] and state['domReady'] and state['waitedMs']>=700,state
    assert await target.locator('p').text_content()=='Parser completed content'
    await target.goto(BASE+'fixtures/records.html',wait_until='domcontentloaded')
-   rows=await host.evaluate("""async()=>{
-     const inspection=await tools.execute('browser.inspect',{tabId:1,selector:'#reviews',limit:40});
-     window.plan={container:'.review',fields:{author:{selector:'.author',attribute:'text'},date:{selector:'time',attribute:'datetime'},text:{selector:'.body',attribute:'text'}},limit:500};
-     window.inspectToken=inspection.inspection;
-     return tools.execute('browser.collect',{tabId:1,inspection:inspectToken,plan});
-   }""")
-   assert len(rows['records'])==2 and rows['records'][0]['fields']['date']=='2026-11-01'
-   assert 'HIDDEN_DATA' not in str(rows) and 'NOT_FOR_COLLECTION' not in str(rows)
+   html=await host.evaluate("tools.pythonCall('html',{tab_id:1,selector:'#reviews'})")
+   assert 'Анна' in html and 'HIDDEN_DATA' not in html and 'NOT_FOR_COLLECTION' not in html
    await target.goto(BASE+'fixtures/records-page2.html',wait_until='domcontentloaded')
-   assert await host.evaluate("""async()=>{try{await tools.execute('browser.collect',{tabId:1,inspection:inspectToken,plan});return false}catch{return true}}""")
-   print('PASS:',transport,'structured DOM plan, visible fields only, stale inspection after navigation rejected')
-   reused=await host.evaluate("""async()=>tools.execute('browser.open',{url:location.origin+'/fixtures/records.html'})""")
-   assert reused['reused'] and reused['tabId']==1 and reused['page']['title']=='Records fixture',reused
-   assert reused['page']['readiness']['ready'] and reused['page']['url'].endswith('/records.html')
-   unchanged=await host.evaluate("""async()=>tools.execute('browser.open',{url:location.origin+'/fixtures/records.html'})""")
-   assert not unchanged['navigated'] and unchanged['tabId']==1
-   separate=await host.evaluate("""async()=>tools.execute('browser.open',{url:location.origin+'/fixtures/records-page2.html',newTab:true})""")
-   assert separate['tabId']!=1 and not separate['reused']
-   print('PASS:',transport,'default reuse, delayed navigation commit, same URL without reload, explicit new tab')
+   print('PASS:',transport,'safe HTML removes hidden fields/scripts and CSS-hidden text')
+   reused=await host.evaluate("tools.pythonCall('open',{url:location.origin+'/fixtures/records.html',new_tab:false})")
+   assert reused['reused'] and reused['tab_id']==1 and reused['readiness']['ready'],reused
+   unchanged=await host.evaluate("tools.pythonCall('open',{url:location.origin+'/fixtures/records.html',new_tab:false})")
+   assert unchanged['tab_id']==1
+   separate=await host.evaluate("tools.pythonCall('open',{url:location.origin+'/fixtures/records-page2.html',new_tab:true})")
+   assert separate['tab_id']!=1 and not separate['reused']
+   await target.goto(BASE+'fixtures/article.html')
+   await host.evaluate("tools.pythonCall('type',{selector:'input',text:'first',tab_id:1})")
+   await host.evaluate("tools.pythonCall('type',{selector:'input',text:'second',tab_id:1})")
+   assert await target.locator('input').input_value()=='second'
+   await host.evaluate("tools.pythonCall('wait',{selector:'input',timeout:1,tab_id:1})")
+   print('PASS:',transport,'default reuse, explicit new tab, selector interaction, type replaces, wait finds content')
    await host.evaluate('tools.detach()');await target.close()
    for n,page in list(tabs.items()):
     if n!=1 and not page.is_closed():await page.close()

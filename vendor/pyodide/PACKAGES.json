@@ -219,5 +219,33 @@
     "sha256": "f61235bc3a15086f0369585e5071ae9ba0bd244a111d12b37f683862e6850c0a",
     "unvendored_tests": false,
     "version": "1.16.0"
+  },
+  "beautifulsoup4": {
+    "depends": [
+      "soupsieve"
+    ],
+    "file_name": "beautifulsoup4-4.12.3-py3-none-any.whl",
+    "imports": [
+      "bs4"
+    ],
+    "install_dir": "site",
+    "name": "beautifulsoup4",
+    "package_type": "package",
+    "sha256": "dadfaf468a0acbd3068e5ad8cfce9f7c364a58161307ccc49ab2452b4956e13b",
+    "unvendored_tests": true,
+    "version": "4.12.3"
+  },
+  "soupsieve": {
+    "depends": [],
+    "file_name": "soupsieve-2.5-py3-none-any.whl",
+    "imports": [
+      "soupsieve"
+    ],
+    "install_dir": "site",
+    "name": "soupsieve",
+    "package_type": "package",
+    "sha256": "e18a6ff6869082a37e78db6e688b239e8f638d647a2e8e3e152f7dee81c262eb",
+    "unvendored_tests": false,
+    "version": "2.5"
   }
 }

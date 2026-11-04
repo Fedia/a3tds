@@ -94,20 +94,18 @@ export function deepseekDOM(action, config, payload) {
     }
     c.querySelectorAll('button,[role=button]').forEach(x => x.remove());
     const pre = c.querySelectorAll('pre');
-    if (pre.length === 1) {
-      const block = pre[0],
-        code = block.querySelector('code') || block;
-      const tagged = language => [block, code].some(node => node.getAttribute('data-language') === language || node.classList.contains('language-' + language));
-      const content = code.textContent.replace(/\n$/, '');
-      const outside = c.cloneNode(true);
-      outside.querySelector('pre').remove();
-      const rest = outside.textContent.trim().toLowerCase();
-      if (rest === 'python.run' || tagged('python.run') && !rest) {
+    if (pre.length) {
+      for (const block of pre) {
+        const
+          code = block.querySelector('code') || block;
+        const tagged = language => [block, code].some(node => node.getAttribute('data-language')?.toLowerCase() === language || [...node.classList].some(name => name.toLowerCase() === 'language-' + language));
+        const content = code.textContent.replace(/\n$/, '');
+        const heading = block.previousElementSibling?.textContent.trim().toLowerCase();
+        const language = tagged('python') || heading === 'python' ? 'python' : 'unknown';
         const length = Math.max(2, ...content.split('\n').map(line => line.match(/^(`+)[ \t]*$/)?.[1].length || 0)) + 1;
         const fence = '`'.repeat(length);
-        return fence + 'python.run\n' + content + '\n' + fence;
+        block.replaceWith(document.createTextNode('\n' + fence + language + '\n' + content + '\n' + fence + '\n'));
       }
-      if (rest === 'json' || tagged('json') && !rest) return content;
     }
     return c.textContent.trim();
   });
@@ -165,7 +163,7 @@ export function deepseekDOM(action, config, payload) {
       complete: !!completion(node) && (i < nodes.length - 1 || ready)
     }));
     const context = all('.ds-message').filter(node => !node.querySelector('.ds-assistant-message-main-content'))
-      .filter(node => /^(Режим браузерного агента\.|Исправь предыдущий JSON\.|Результат инструмента \()/.test(node.textContent.trim()))
+      .filter(node => /^(Режим Python-агента\.|Исправь формат Python-ответа\.|Результат Python \()/.test(node.textContent.trim()))
       .map(source => ({
         source,
         turn: source.closest('.ds-virtual-list-visible-items > div') || source,

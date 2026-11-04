@@ -1,13 +1,8 @@
 import {
-  decodeToolResponse,
   responseUIKey
 } from './tool-format.js';
-import {
-  commandUIKey
-} from './ui-state.js';
 /** Render readable tasks, execution receipts and final answers while preserving adapter DOM. */
 export function mountFinalAnswers(getAnswers, {
-  getFinals = () => [],
   getHistory = () => [],
   color = () => getComputedStyle(document.body).color,
   preserveScroll = work => work()
@@ -25,8 +20,7 @@ export function mountFinalAnswers(getAnswers, {
     if (entry.copy && entry.copyHandler) entry.copy.removeEventListener('click', entry.copyHandler, true);
   };
   const render = () => preserveScroll(() => {
-    const finals = getFinals(),
-      history = getHistory();
+    const history = getHistory();
     for (const [source, entry] of rendered) {
       if (!source.isConnected || entry.card && source.parentElement !== entry.card.parentElement) {
         restore(entry);
@@ -43,37 +37,19 @@ export function mountFinalAnswers(getAnswers, {
         final = false,
         step = null,
         recognized = !!answer.context;
-      if (answer.context && /Состояние:\s*\{"steps":0[,}]/.test(raw)) {
-        text = raw.match(/\nЗадача: ([\s\S]*?)\nОтвет —/)?.[1] || '';
+      if (answer.context && raw.startsWith('Режим Python-агента.')) {
+        text = raw.match(/\nЗадача: ([\s\S]*?)\nКонец задачи\./)?.[1] || '';
       } else if (!answer.context) {
-        const clean = raw.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
-        let command;
-        try {
-          command = decodeToolResponse(raw);
-        } catch {}
-        recognized = command && typeof command.tool === 'string' &&
-          /^(browser\.(open|snapshot|inspect|collect|click|type|scroll|extract)|files\.(list|read|write)|python\.(run|status|cancel|reset)|task\.finish)$/.test(command.tool) ||
-          /^\{\s*"(?:id|tool|description|args)"\s*:/.test(clean);
-        if (recognized && command) {
-          const wireKey = responseUIKey(raw);
-          const candidates = history.filter(item => item.responseKey === wireKey && (!item.messageKey || item.messageKey === answer.messageKey));
-          step = (command.id && history.findLast(item => item.key === commandUIKey(command))) || (candidates.length === 1 ? candidates[0] : null);
-          if (step && !step.hidden) text = step.description + '\n' + ({
-              running: 'Выполняется…',
-              ok: 'Готово',
-              error: 'Ошибка',
-              paused: 'Приостановлено',
-              interrupted: 'Остановлено'
-            } [step.status] || '') +
-            (step.detail ? ' · ' + step.detail : '');
-        }
-        if (complete && command?.tool === 'task.finish' && typeof command.args?.summary === 'string') {
-          const accepted = finals.find(item => ((item.responseKey === responseUIKey(raw) && (!item.messageKey || item.messageKey === answer.messageKey)) || command.id && item.commandId === command.id) && item.text === command.args.summary);
-          if (accepted) {
-            final = true;
-            text = accepted.text;
-          }
-        }
+        const candidates = history.filter(item => item.responseKey === responseUIKey(raw) && (!item.messageKey || item.messageKey === answer.messageKey));
+        step = candidates.length === 1 ? candidates[0] : null;
+        recognized = !!step;
+        if (step) text = step.description + '\n' + ({
+          running: 'Выполняется…',
+          ok: 'Готово',
+          error: 'Ошибка',
+          paused: 'Приостановлено',
+          interrupted: 'Остановлено'
+        } [step.status] || '') + (step.detail ? ' · ' + step.detail : '');
       }
       const ink = color();
       const signature = JSON.stringify([raw, complete, text, final, step?.status, ink]);

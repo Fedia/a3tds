@@ -1,8 +1,4 @@
 import {
-  domCollectionOperation,
-  validateExtractionPlan
-} from './dom-collector.js';
-import {
   samplePageReadiness,
   waitForStablePage
 } from './page-readiness.js';
@@ -38,17 +34,79 @@ export function pageOperation(op, args) {
     });
   }
   const visible = e => !!(e.getClientRects().length) && getComputedStyle(e).visibility !== 'hidden';
+  const root = () => {
+    const node = args.selector ? document.querySelector(args.selector) : document.querySelector('article,main,[role="main"]') || document.body;
+    if (!node) throw new Error('Блок не найден: ' + args.selector);
+    return node;
+  };
+  const cloneVisible = () => {
+    const source = root(),
+      copy = source.cloneNode(true);
+    const originals = [...source.querySelectorAll('*')],
+      clones = [...copy.querySelectorAll('*')];
+    originals.forEach((node, i) => {
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden') clones[i].remove();
+    });
+    return copy;
+  };
   const text = () => {
-    const c = (document.querySelector('article,main,[role="main"]') || document.body).cloneNode(true);
+    const c = cloneVisible();
     c.querySelectorAll('script,style,nav,header,footer,form,input,textarea,[contenteditable],aside')
       .forEach(x => x.remove());
     return c.textContent.replace(/\s+/g, ' ').trim();
   };
+  if (op === 'exists') return {
+    exists: !!document.querySelector(args.selector) && visible(document.querySelector(args.selector))
+  };
+  if (op === 'html') {
+    const c = cloneVisible();
+    const forbidden = 'script,style,iframe,object,embed,input,textarea,select,[contenteditable],[hidden],[aria-hidden="true"]';
+    if (c.matches(forbidden)) throw new Error('Этот блок содержит скрытые данные или поля ввода');
+    c.querySelectorAll(forbidden).forEach(e => e.remove());
+    for (const e of [c, ...c.querySelectorAll('*')]) {
+      for (const {
+          name,
+          value
+        }
+        of [...e.attributes]) {
+        if (!/^(id|class|role|href|src|title|alt|datetime|colspan|rowspan|aria-label|aria-expanded|data-(id|name|author|date|rating|price))$/.test(name)) e.removeAttribute(name);
+        else if (name === 'href' || name === 'src') {
+          try {
+            const u = new URL(value, location.href);
+            if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || [...u.searchParams.keys(), ...new URLSearchParams(u.hash.slice(1)).keys()].some(k => /^(token|access_token|refresh_token|api[_-]?key|password|session(?:id)?|authorization)$/i.test(k))) e.removeAttribute(name);
+          } catch {
+            e.removeAttribute(name);
+          }
+        }
+      }
+    }
+    const html = c.outerHTML;
+    if (html.length > 2000000) throw new Error('HTML блока больше 2000000 символов: выбери более узкий selector');
+    return {
+      url: location.href,
+      documentId: performance.timeOrigin,
+      html
+    };
+  }
+  if (op === 'select') {
+    const nodes = [...document.querySelectorAll(args.selector)].filter(visible);
+    if (nodes.length !== 1) throw new Error('Селектор должен найти ровно один видимый элемент; найдено: ' + nodes.length);
+    state.token = crypto.randomUUID();
+    state.at = state.revision;
+    state.refs = {
+      e0: nodes[0]
+    };
+    return {
+      snapshot: state.token,
+      element: 'e0'
+    };
+  }
   if (op === 'snapshot') {
     state.refs = {};
     state.token = crypto.randomUUID();
     state.at = state.revision;
-    const all = [...document.querySelectorAll(
+    const all = [...root().querySelectorAll(
       'a[href],button,input:not([type=password]):not([type=hidden]),textarea,select,[role=button]')].filter(
       visible);
     const elements = all.slice(0, 80).map((e, i) => {
@@ -72,53 +130,12 @@ export function pageOperation(op, args) {
       text: full.slice(0, 9000),
       textCharacters: full.length,
       truncated: full.length > 9000 || all.length > 80,
-      elements
-    };
-  }
-  if (op === 'extract') {
-    let data;
-    let truncated = false;
-    let limits = null;
-    if (args.kind === 'text') data = text();
-    if (args.kind === 'links') {
-      const all = [...document.querySelectorAll('a[href]')];
-      truncated = all.length > 500 || all.some(e => e.textContent.trim().length > 200);
-      limits = {
-        totalLinks: all.length,
-        maxLinks: 500,
-        labelCharacters: 200
-      };
-      data = all.slice(0, 500).map(e => ({
-        text: e.textContent.trim().slice(0, 200),
-        url: e.href
-      }));
-    }
-    if (args.kind === 'tables') {
-      const all = [...document.querySelectorAll('table')];
-      truncated = all.length > 30 || all.some(t => t.rows.length > 300 || [...t.rows].some(r => r.cells
-        .length > 40));
-      limits = {
-        totalTables: all.length,
-        maxTables: 30,
-        maxRows: 300,
-        maxColumns: 40
-      };
-      data = [...document.querySelectorAll('table')].slice(0, 30).map(t => [...t.rows].slice(0, 300).map(
-        r => [...r.cells].slice(0, 40).map(c => c.textContent.trim())));
-    }
-    const raw = JSON.stringify(data);
-    if (raw.length > 300000) throw new Error(
-      'Извлечение превышает 300000 символов; требуется более узкий источник');
-    return {
-      url: location.href,
-      documentId: performance.timeOrigin,
-      title: document.title,
-      method: 'dom-main-text-v1',
-      kind: args.kind,
-      data,
-      truncated,
-      limits,
-      collectedAt: new Date().toISOString()
+      elements,
+      dom: [...root().querySelectorAll('*')].slice(0, 80).map(e => ({
+        tag: e.tagName.toLowerCase(),
+        id: e.id || undefined,
+        class: typeof e.className === 'string' ? e.className.slice(0, 180) : undefined
+      }))
     };
   }
   if (op === 'locate') {
@@ -168,8 +185,7 @@ export function pageOperation(op, args) {
       const end = element.selectionEnd ?? start;
       const proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement
         .prototype;
-      Object.getOwnPropertyDescriptor(proto, 'value').set.call(element, element.value.slice(0, start) + args
-        .text + element.value.slice(end));
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(element, args.replace ? args.text : element.value.slice(0, start) + args.text + element.value.slice(end));
       element.dispatchEvent(new InputEvent('input', {
         bubbles: true,
         inputType: 'insertText',
@@ -184,6 +200,12 @@ export function pageOperation(op, args) {
       requiresSnapshot: true,
       transport: 'scripting'
     };
+  }
+  if (op === 'selectText') {
+    const e = state.refs[args.element];
+    if (!e?.isConnected || !e.matches('input,textarea')) throw new Error('Поле исчезло');
+    e.select();
+    return true;
   }
   if (op === 'invalidate') {
     state.token = null;
@@ -220,7 +242,7 @@ export class BrowserTools {
     assert(state.tabs.some(t => t.id === id), 'Вкладка не принадлежит задаче');
     const ownership = await chrome.storage.session.get('owned-tab-' + id);
     assert(ownership['owned-tab-' + id] === state.id,
-      'Вкладка не подтверждена в текущем сеансе браузера. Сбросьте старые вкладки и откройте новые.');
+      'Вкладка не подтверждена в текущем сеансе браузера. Открой страницу заново через browser.open.');
     const t = await chrome.tabs.get(id);
     const fixture = url => url?.startsWith(chrome.runtime.getURL('fixtures/'));
     if ((!t.url || t.url === 'about:blank') && t.pendingUrl) {
@@ -241,11 +263,8 @@ export class BrowserTools {
   }
   async adoptTabs(previous) {
     if (!previous?.id) return;
-    const blocked = new Set(previous.blockedInteractions || []);
-    if (previous.pending?.command.args?.tabId) blocked.add(previous.pending.command.args.tabId);
     for (const entry of previous.tabs || []) {
-      if (entry.id === previous.modelTabId || blocked.has(entry.id) ||
-        previous.pending?.command.id && entry.commandId === previous.pending.command.id) continue;
+      if (entry.id === previous.modelTabId) continue;
       try {
         const ownership = await chrome.storage.session.get('owned-tab-' + entry.id);
         if (ownership['owned-tab-' + entry.id] !== previous.id) continue;
@@ -309,7 +328,7 @@ export class BrowserTools {
   }
   async run(id, op, args = {}) {
     const generation = this.generation;
-    const reading = ['snapshot', 'extract', 'inspect', 'collect'].includes(op);
+    const reading = ['snapshot', 'html'].includes(op);
     const readiness = reading ? await this.waitForPage(id) : null;
     for (let attempt = 0;; attempt++) {
       if (generation !== this.generation) throw new Error('Действие остановлено');
@@ -335,13 +354,13 @@ export class BrowserTools {
         return data;
       } catch (e) {
         if (generation !== this.generation || attempt >= 1 ||
-          !['snapshot', 'extract', 'inspect', 'collect', 'locate'].includes(op) || this.interrupted) throw e;
+          !['snapshot', 'html', 'locate'].includes(op) || this.interrupted) throw e;
         await sleep(200);
       }
     }
   }
   async runOnce(id, op, args = {}) {
-    const operation = op === 'readiness' ? samplePageReadiness : ['inspect', 'collect'].includes(op) ? domCollectionOperation : pageOperation;
+    const operation = op === 'readiness' ? samplePageReadiness : pageOperation;
     if (this.useScripting()) {
       await this.check(id);
       const [result] = await timeout(chrome.scripting.executeScript({
@@ -468,7 +487,7 @@ export class BrowserTools {
       };
     }
     if (this.state.tabs.length >= 5) {
-      const error = new Error('Уже открыты пять рабочих вкладок. Используй browser.open без newTab.');
+      const error = new Error('Уже открыты пять рабочих вкладок. Используй browser.open с new_tab=False.');
       error.definite = true;
       throw error;
     }
@@ -498,7 +517,7 @@ export class BrowserTools {
   resolveReference(args) {
     const match = args.ref?.match(/^r([0-9]+)_([a-f0-9-]{36})_(e[0-9]+)$/);
     if (!match) {
-      const error = new Error('Устаревший ref: запросите browser.snapshot');
+      const error = new Error('Устаревший ref: запросите browser.read');
       error.definite = true;
       throw error;
     }
@@ -514,44 +533,7 @@ export class BrowserTools {
   async execute(tool, a, context = {}) {
     if (a.ref) a = this.resolveReference(a);
     const op = tool.split('.')[1];
-    if (op === 'collect') validateExtractionPlan(a.plan);
-    if (op === 'open') {
-      const opened = await this.open(a.url, {
-        ...context,
-        newTab: a.newTab === true
-      });
-      try {
-        const page = await this.run(opened.tabId, 'snapshot');
-        const entry = this.state.tabs.find(t => t.id === opened.tabId);
-        if (entry?.navigation && page.readiness?.ready) {
-          entry.navigation.phase = 'observed';
-          entry.navigation.observedURL = page.url;
-          await this.save();
-        }
-        return {
-          ...opened,
-          url: page.url || opened.url,
-          page
-        };
-      } catch (e) {
-        // Navigation succeeded: report failed reading separately, never reopen blindly.
-        return {
-          ...opened,
-          page: null,
-          readError: {
-            code: 'SNAPSHOT_FAILED',
-            message: e.message
-          },
-          next: 'Вкладка открыта, но текст не прочитан. Используй browser.snapshot или browser.extract.'
-        };
-      }
-    }
     if (op === 'click' || op === 'type') {
-      if (this.state.blockedInteractions?.includes(a.tabId)) {
-        const error = new Error('Исход предыдущего взаимодействия не подтверждён. Эта вкладка доступна для чтения; используй чтение или открой другую.');
-        error.definite = true;
-        throw error;
-      }
       let info;
       try {
         info = await this.run(a.tabId, 'locate', a);
@@ -610,6 +592,7 @@ export class BrowserTools {
       });
       if (op === 'type') {
         assert(['INPUT', 'TEXTAREA'].includes(info.tag), 'Ввод только в текстовые поля');
+        if (a.replace) await this.runOnce(a.tabId, 'selectText', a);
         await this.send(a.tabId, 'Input.insertText', {
           text: a.text
         });
@@ -622,6 +605,91 @@ export class BrowserTools {
       };
     }
     return this.run(a.tabId, op, a);
+  }
+  /** Private Python bridge; a method call never grants ownership of another tab. */
+  async pythonCall(method, args, context = {}) {
+    assert(args && typeof args === 'object' && !Array.isArray(args), 'Неверные аргументы браузера');
+    const shapes = {
+      open: ['url', 'new_tab'],
+      read: ['selector', 'tab_id'],
+      html: ['selector', 'tab_id'],
+      click: ['selector', 'ref', 'tab_id'],
+      type: ['text', 'selector', 'ref', 'tab_id'],
+      scroll: ['delta', 'tab_id'],
+      wait: ['selector', 'timeout', 'tab_id']
+    };
+    assert(Object.hasOwn(shapes, method) && Object.keys(args).every(k => shapes[method].includes(k)), 'Неизвестный метод или аргументы браузера');
+    if (method === 'open') {
+      assert(typeof args.url === 'string' && args.url.length <= 2000 && typeof args.new_tab === 'boolean', 'Неверный URL или new_tab');
+      const opened = await this.open(args.url, {
+        ...context,
+        newTab: args.new_tab,
+        fixture: args.url.startsWith(chrome.runtime.getURL('fixtures/'))
+      });
+      return {
+        tab_id: opened.tabId,
+        url: opened.url,
+        reused: opened.reused,
+        readiness: await this.waitForPage(opened.tabId)
+      };
+    }
+    const tabId = args.tab_id ?? this.state.workTabId;
+    assert(Number.isInteger(tabId), 'Сначала открой страницу через browser.open');
+    await this.check(tabId);
+    const selector = args.selector;
+    if (selector != null) assert(typeof selector === 'string' && selector.length > 0 && selector.length <= 1000, 'Неверный selector');
+    if (method === 'read') return this.run(tabId, 'snapshot', {
+      selector: selector || 'body'
+    });
+    if (method === 'html') {
+      const page = await this.run(tabId, 'html', {
+        selector: selector || 'body'
+      });
+      assert(page.readiness.ready, 'Страница ещё нестабильна: дождись browser.wait или повтори чтение; HTML не передан как полный');
+      return page.html;
+    }
+    if (method === 'wait') {
+      assert(selector && Number.isFinite(args.timeout) && args.timeout > 0 && args.timeout <= 120, 'Нужны selector и timeout от 0 до 120 секунд');
+      const generation = this.generation,
+        until = Date.now() + args.timeout * 1000;
+      while (Date.now() < until) {
+        assert(generation === this.generation && !this.interrupted, 'Ожидание остановлено');
+        if ((await this.runOnce(tabId, 'exists', {
+            selector
+          })).exists) return {
+          found: true,
+          selector
+        };
+        await sleep(200);
+      }
+      throw new Error('Элемент не появился за ' + args.timeout + ' с: ' + selector);
+    }
+    if (method === 'scroll') {
+      assert(Number.isFinite(args.delta) && Math.abs(args.delta) <= 100000, 'Неверная величина прокрутки');
+      return this.run(tabId, 'scroll', {
+        delta: args.delta
+      });
+    }
+    assert(!!selector !== !!args.ref, 'Нужен либо selector, либо ref');
+    let target;
+    if (args.ref) {
+      target = this.resolveReference({
+        ref: args.ref
+      });
+      assert(args.tab_id == null || target.tabId === tabId, 'ref относится к другой вкладке');
+      await this.check(target.tabId);
+    } else target = {
+      tabId,
+      ...await this.runOnce(tabId, 'select', {
+        selector
+      })
+    };
+    if (method === 'type') {
+      assert(typeof args.text === 'string' && args.text.length <= 50000, 'Неверный текст');
+      target.text = args.text;
+      target.replace = true;
+    }
+    return this.execute('browser.' + method, target, context);
   }
   async detach() {
     for (const id of this.attached) {

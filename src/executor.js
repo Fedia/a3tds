@@ -15,6 +15,9 @@ import {
   PythonRuntime
 } from './python-runtime.js';
 import {
+  ProjectSync
+} from './project-sync.js';
+import {
   AgentController
 } from './agent-controller.js';
 import {
@@ -30,10 +33,17 @@ assert(Number.isInteger(tabId), 'Браузер не предоставил вк
 const store = await new StateStore().init();
 const files = new ProjectFiles(store);
 const model = new DeepSeekAdapter(store);
-const python = new PythonRuntime();
+const python = new PythonRuntime(new ProjectSync(store));
 const savedTask = await store.get('task');
 const heldLocks = await navigator.locks?.query();
-if (savedTask && !heldLocks?.held.some(lock => lock.name === 'psy-agent-execution')) await store.save(StateStore.recover(savedTask));
+if (savedTask && !heldLocks?.held.some(lock => lock.name === 'psy-agent-execution')) {
+  const recovered = StateStore.recover(savedTask);
+  if (recovered) await store.save(recovered);
+  else {
+    await store.put('task', null);
+    await chrome.storage.local.remove(['summary', 'ui-history', 'ui-finals']);
+  }
+}
 let controller = null,
   browser = null,
   handling = false,
@@ -67,6 +77,7 @@ async function connect({
   const options = await chrome.storage.local.get(['chat-bindings', 'browser-mode', 'browser-auto-fallback']);
   await files.restore();
   await files.permission();
+  await python.flush();
   await python.bindScope((await chrome.tabs.get(tabId)).url, files.root);
   const state = await model.connect(tabId, options['chat-bindings'] || {});
   assert(state.status === 'ready' || allowGenerating && state.status === 'generating', state.reason || 'Чат ещё не готов к отправке');
@@ -129,7 +140,6 @@ async function runLocked(message, respond) {
           browser.state = controller.s;
         }
         if (controller.s) {
-          await controller.pythonJobs().cancelActive('Начата новая задача');
           await store.put('archive-' + controller.s.id, controller.s);
         }
         await controller.create(message.task);
@@ -152,8 +162,6 @@ async function runLocked(message, respond) {
         controller.s.modelTabId = tabId;
         if (continuing && message.command === 'chat-task') await model.dom('clear-task', message.task);
         if (continuing && controller.s.status === 'stopped') controller.s.status = 'paused';
-        if (message.command === 'reconcile') await controller.reconcileCommand(message.note);
-        if (message.command === 'recover-send') await controller.reconcileSend();
         if (message.command === 'reset-tabs') {
           controller.s.tabs = [];
           await controller.save();
@@ -208,7 +216,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
         ok: true,
         data: {
           active: locks.held.some(l => l.name === 'psy-agent-execution'),
-          computing: !!python.running || [...(python.jobs?.jobs.values() || [])].some(job => job.record.status === 'running' || job.exporting),
+          computing: !!python.running,
           capabilities: capabilities(),
           status: saved?.status,
           reason: saved?.reason,
@@ -218,7 +226,6 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       return;
     }
     if (message.command === 'cancel-python-only') {
-      if (python.jobs) await python.jobs.cancelActive('Начата задача в другом чате');
       python.reset('Начата задача в другом чате');
       respond({
         ok: true
@@ -228,7 +235,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     if (message.command === 'chat-stop') {
       agentEnabled = false;
       cancellation++;
-      if (controller && (handling || controller.running || python.running || [...(python.jobs?.jobs.values() || [])].some(job => job.record.status === 'running'))) await controller.stop();
+      if (controller && (handling || controller.running || python.running)) await controller.stop();
       respond({
         ok: true
       });

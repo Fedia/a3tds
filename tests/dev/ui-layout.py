@@ -48,8 +48,8 @@ async def main():
    assert await chat.evaluate("document.querySelector('.psy-agent-progress').nextElementSibling===document.querySelector('form') && !testShadow.host.closest('header')")
    await chat.screenshot(path=str(OUT/f'chat-{theme}.png'))
    await chat.evaluate('''async()=>{
-     const {commandUIKey}=await import('/src/ui-state.js');const command=JSON.parse(document.querySelector('#answer').textContent);
-     const entry={key:commandUIKey(command),description:command.description,status:'running',detail:''};
+     const {responseUIKey}=await import('/src/tool-format.js');const raw=document.querySelector('#answer').textContent;const command={description:'Выполнить сценарий'};
+     const entry={responseKey:responseUIKey(raw),description:command.description,status:'running',detail:''};
      await chrome.storage.local.set({'ui-history':[{taskId:'t',chatURL:location.href,entries:[entry]}],summary:{...values.summary,status:'running',phase:'executing',current:command.description,message:''}});
    }''')
    await chat.wait_for_selector('.psy-agent-step');assert 'Выполняется' in await chat.locator('.psy-agent-step').inner_text()

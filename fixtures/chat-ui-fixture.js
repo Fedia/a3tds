@@ -1,10 +1,2 @@
-document.querySelector('#task').textContent = 'Режим браузерного агента.\nЗадача: Собери темы с четырёх страниц\nОтвет — один JSON\nСостояние: {"steps":0}';
-document.querySelector('#answer').textContent = JSON.stringify({
-  id: 'step',
-  tool: 'python.run',
-  args: {
-    code: 'result=1',
-    data: {}
-  },
-  description: 'Повторно объединить темы с четырёх страниц'
-});
+document.querySelector('#task').textContent = 'Режим Python-агента.\nЗадача: Собери темы с четырёх страниц\nКонец задачи.\nСостояние: {"steps":0}';
+document.querySelector('#answer').textContent = '```python\nprint("Объединяю темы четырёх страниц")\nresult=1\n```';
