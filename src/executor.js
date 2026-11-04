@@ -36,7 +36,7 @@ const model = new DeepSeekAdapter(store);
 const python = new PythonRuntime(new ProjectSync(store));
 const savedTask = await store.get('task');
 const heldLocks = await navigator.locks?.query();
-if (savedTask && !heldLocks?.held.some(lock => lock.name === 'psy-agent-execution')) {
+if (savedTask && !heldLocks?.held.some(lock => lock.name === 'deepseek-agent-execution')) {
   const recovered = StateStore.recover(savedTask);
   if (recovered) await store.save(recovered);
   else {
@@ -116,7 +116,7 @@ async function runLocked(message, respond) {
   handling = true;
   const generation = cancellation;
   try {
-    await navigator.locks.request('psy-agent-execution', {
+    await navigator.locks.request('deepseek-agent-execution', {
       ifAvailable: true
     }, async lock => {
       assert(lock, 'Агент выполняется в другом чате');
@@ -215,7 +215,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       respond({
         ok: true,
         data: {
-          active: locks.held.some(l => l.name === 'psy-agent-execution'),
+          active: locks.held.some(l => l.name === 'deepseek-agent-execution'),
           computing: !!python.running,
           capabilities: capabilities(),
           status: saved?.status,

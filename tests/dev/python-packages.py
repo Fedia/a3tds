@@ -49,7 +49,7 @@ result = {"slug": slugify("Привет, мир!"), "has_dependency": __import__
   result=await page.evaluate('''run(`import micropip
 await micropip.install("wordcloud==1.9.3")
 from wordcloud import WordCloud
-wc = WordCloud(width=200, height=100, background_color="white").generate("данные данные исследование студент")
+wc = WordCloud(width=200, height=100, background_color="white").generate("данные данные таблица файл")
 wc.to_file("cloud.png")
 result={"words":len(wc.words_)}`)''')
   first=await page.evaluate("async()=>new Uint8Array(await(await(await root.getFileHandle('cloud.png')).getFile()).arrayBuffer())[0]")

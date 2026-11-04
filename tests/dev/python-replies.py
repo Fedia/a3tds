@@ -21,19 +21,19 @@ async def main():
     add('one',short);add('two',short);window.entries=[{responseKey:key(short),messageKey:'one',description:'Первое чтение',status:'ok',detail:'сохранено'}];window.finals=[];
     window.view=mountFinalAnswers(()=>dom('answer-elements'),{getHistory:()=>entries,getFinals:()=>finals});
   }''')
-  assert await page.locator('.psy-agent-step').count()==1
-  assert 'Первое чтение' in await page.locator('[data-virtual-list-item-key=one] .psy-agent-step').inner_text()
-  assert await page.locator('[data-virtual-list-item-key=two] .psy-agent-step').count()==0
+  assert await page.locator('.deepseek-agent-step').count()==1
+  assert 'Первое чтение' in await page.locator('[data-virtual-list-item-key=one] .deepseek-agent-step').inner_text()
+  assert await page.locator('[data-virtual-list-item-key=two] .deepseek-agent-step').count()==0
   await page.evaluate("entries.push({responseKey:key(short),messageKey:'two',description:'Второе чтение',status:'error',detail:'ошибка'});view.refresh()")
-  assert await page.locator('.psy-agent-step').count()==2
-  assert 'Ошибка' in await page.locator('[data-virtual-list-item-key=two] .psy-agent-step').inner_text()
+  assert await page.locator('.deepseek-agent-step').count()==2
+  assert 'Ошибка' in await page.locator('[data-virtual-list-item-key=two] .deepseek-agent-step').inner_text()
   print('PASS: identical Python replies bind to different native message keys and cannot borrow each other\'s receipts',flush=True)
   await page.evaluate('''()=>{window.code='text = "quote"\\nresult = 42';add('python',code,'python');window.wire=dom('inspect').answer;entries.push({responseKey:key(wire),messageKey:'python',description:'Проверить код',status:'ok',detail:'42'});view.refresh()}''')
   assert await page.evaluate("wire==='```python\\n'+code+'\\n```'")
-  assert '42' in await page.locator('[data-virtual-list-item-key=python] .psy-agent-step').inner_text()
+  assert '42' in await page.locator('[data-virtual-list-item-key=python] .deepseek-agent-step').inner_text()
   await page.evaluate("add('ordinary','print(\"example\")','python');view.refresh()")
   assert 'print' in await page.locator('[data-virtual-list-item-key=ordinary]').inner_text()
-  assert await page.locator('[data-virtual-list-item-key=ordinary] .psy-agent-step').count()==0
+  assert await page.locator('[data-virtual-list-item-key=ordinary] .deepseek-agent-step').count()==0
   assert 'print' in await page.evaluate("dom('inspect').answer")
   print('PASS: rendered Python block reconstructed; unexecuted examples stay visible without receipts',flush=True)
   await page.evaluate("add('final','Готовый ответ');view.refresh()")
@@ -42,7 +42,7 @@ async def main():
   await page.evaluate("""()=>{const source=document.querySelector('[data-virtual-list-item-key=final] .ds-assistant-message-main-content');source.textContent='<img src=x onerror=alert(1)>';view.refresh()}""")
   assert await page.locator('[data-virtual-list-item-key=final] img').count()==0
   await page.evaluate("""()=>{const root=document.querySelector('.ds-virtual-list');const next=root.cloneNode(false);next.innerHTML='<div class=ds-virtual-list-visible-items></div>';root.replaceWith(next);add('python',code,'python');add('final','<img src=x onerror=alert(1)>');view.refresh();}""")
-  assert await page.locator('[data-virtual-list-item-key=python] .psy-agent-step').count()==1
+  assert await page.locator('[data-virtual-list-item-key=python] .deepseek-agent-step').count()==1
   assert await page.evaluate("dom('inspect').answer==='<img src=x onerror=alert(1)>'")
   print('PASS: final text stays native; safe text rendering and list remount preserve code receipts and raw adapter answer',flush=True)
   await b.close()

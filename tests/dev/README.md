@@ -16,4 +16,4 @@
 - `python tests/dev/touch-ui.py` — перехват отправки, обычный чат, мастер привязки и отмена.
 - `python tests/dev/chat-discovery.py` и `python tests/dev/deepseek-observed.py` — эвристики на искусственном/сохранённом DOM. Сохранённый DOM — исторический экспорт, не живая проверка нового протокола.
 
-`python .github/scripts/test_manifest.py` проверяет CSP, приватность Python-ресурсов и доступность UI-модулей. `python .github/scripts/package.py` проверяет официальные контрольные суммы и создаёт `dist/psy-agent.zip`.
+`python .github/scripts/test_manifest.py` проверяет CSP, приватность Python-ресурсов и доступность UI-модулей. `python .github/scripts/package.py` проверяет официальные контрольные суммы и создаёт `dist/deepseek-agent.zip`.

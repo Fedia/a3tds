@@ -10,7 +10,7 @@ import {
 } from './util.js';
 /** Executed only in an isolated CDP world. References are invalidated by any DOM mutation. */
 export function pageOperation(op, args) {
-  const key = '__psyAgentDOM';
+  const key = '__deepseekAgentDOM';
   let state = globalThis[key];
   if (!state) {
     state = globalThis[key] = {
@@ -400,7 +400,7 @@ export class BrowserTools {
       executionContextId
     } = await this.send(id, 'Page.createIsolatedWorld', {
       frameId: frameTree.frame.id,
-      worldName: 'psy-agent',
+      worldName: 'deepseek-agent',
       grantUniveralAccess: false
     });
     const r = await this.send(id, 'Runtime.evaluate', {

@@ -86,7 +86,7 @@ export function mountChatScroll() {
       direction = 0;
     }
     // Native "to latest" buttons are outside the list. A deliberate click may resume following.
-    else if (event.target.closest('button,[role=button]') && !event.target.closest('[data-psy-agent-toolbar]')) {
+    else if (event.target.closest('button,[role=button]') && !event.target.closest('[data-deepseek-agent-toolbar]')) {
       manualUntil = now() + 1000;
       direction = 1;
     }
@@ -138,11 +138,11 @@ export function mountChatScroll() {
     }
   };
   // Shared only with this extension's isolated-world DOM adapter, never a page message bridge.
-  globalThis.__psyAgentScroll = guard;
+  globalThis.__deepseekAgentScroll = guard;
   return Object.assign(() => {
     for (const [type, handler] of Object.entries(listeners)) document.removeEventListener(type, handler, true);
     cancelAnimationFrame(frame);
-    if (globalThis.__psyAgentScroll === guard) delete globalThis.__psyAgentScroll;
+    if (globalThis.__deepseekAgentScroll === guard) delete globalThis.__deepseekAgentScroll;
   }, {
     guard
   });

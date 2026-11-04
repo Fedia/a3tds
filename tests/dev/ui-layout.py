@@ -6,7 +6,7 @@ from playwright.async_api import async_playwright
 ROOT=Path(__file__).resolve().parents[2]
 server=ThreadingHTTPServer(('127.0.0.1',0),functools.partial(SimpleHTTPRequestHandler,directory=str(ROOT)))
 threading.Thread(target=server.serve_forever,daemon=True).start();BASE=f'http://127.0.0.1:{server.server_port}/'
-OUT=Path(os.environ.get('UI_PREVIEW_DIR',Path(tempfile.gettempdir())/'psy-agent-ui-preview'));OUT.mkdir(parents=True,exist_ok=True)
+OUT=Path(os.environ.get('UI_PREVIEW_DIR',Path(tempfile.gettempdir())/'deepseek-agent-ui-preview'));OUT.mkdir(parents=True,exist_ok=True)
 async def main():
  async with async_playwright() as p:
   browser=await p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN') or shutil.which('chromium'),args=['--no-sandbox'])
@@ -32,33 +32,33 @@ async def main():
    await chat.evaluate("testShadow.querySelector('input').click()");await chat.wait_for_timeout(200)
    bounds=await chat.evaluate('''()=>{const r=testShadow.host.getBoundingClientRect();return {height:r.height,position:getComputedStyle(testShadow.host).position}}''')
    assert bounds['height']<=48 and bounds['position']!='fixed',bounds
-   assert await chat.evaluate("testShadow.host.nextElementSibling===document.querySelector('.psy-agent-progress') && document.querySelector('.psy-agent-progress').nextElementSibling===document.querySelector('form')"), 'Controls must precede the composer, independent of headers'
+   assert await chat.evaluate("testShadow.host.nextElementSibling===document.querySelector('.deepseek-agent-progress') && document.querySelector('.deepseek-agent-progress').nextElementSibling===document.querySelector('form')"), 'Controls must precede the composer, independent of headers'
    gear=await chat.evaluate("()=>{const r=testShadow.querySelector('button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}}")
    assert await chat.evaluate("({x,y})=>document.elementFromPoint(x,y)===testShadow.host",gear), 'Settings must be on screen and not covered'
    await chat.touchscreen.tap(gear['x'],gear['y'])
    assert await chat.evaluate("sent.some(m=>m.type==='open-workspace')"), 'A real tap must open settings'
-   assert await chat.locator('.psy-agent-step').count()==0
-   text=await chat.locator('.psy-agent-progress').inner_text()
+   assert await chat.locator('.deepseek-agent-step').count()==0
+   text=await chat.locator('.deepseek-agent-progress').inner_text()
    assert text=='Пауза. Не удалось прочитать ответ DeepSeek.',text
    assert 'Агент работает' not in await chat.locator('body').inner_text()
    assert await chat.evaluate('document.documentElement.scrollWidth<=innerWidth')
    await chat.evaluate("window.originalEngine=allShadows[0].querySelector('iframe').contentWindow;const h=document.querySelector('header:not([hidden])');h.replaceWith(h.cloneNode(true));const form=document.querySelector('form');form.replaceWith(form.cloneNode(true))")
    await chat.wait_for_timeout(300)
-   assert await chat.evaluate("originalEngine===allShadows[0].querySelector('iframe').contentWindow && document.querySelectorAll('[data-psy-agent-toolbar]').length===1")
-   assert await chat.evaluate("document.querySelector('.psy-agent-progress').nextElementSibling===document.querySelector('form') && !testShadow.host.closest('header')")
+   assert await chat.evaluate("originalEngine===allShadows[0].querySelector('iframe').contentWindow && document.querySelectorAll('[data-deepseek-agent-toolbar]').length===1")
+   assert await chat.evaluate("document.querySelector('.deepseek-agent-progress').nextElementSibling===document.querySelector('form') && !testShadow.host.closest('header')")
    await chat.screenshot(path=str(OUT/f'chat-{theme}.png'))
    await chat.evaluate('''async()=>{
      const {responseUIKey}=await import('/src/tool-format.js');const raw=document.querySelector('#answer').textContent;const command={description:'Выполнить сценарий'};
      const entry={responseKey:responseUIKey(raw),description:command.description,status:'running',detail:''};
      await chrome.storage.local.set({'ui-history':[{taskId:'t',chatURL:location.href,entries:[entry]}],summary:{...values.summary,status:'running',phase:'executing',current:command.description,message:''}});
    }''')
-   await chat.wait_for_selector('.psy-agent-step');assert 'Выполняется' in await chat.locator('.psy-agent-step').inner_text()
+   await chat.wait_for_selector('.deepseek-agent-step');assert 'Выполняется' in await chat.locator('.deepseek-agent-step').inner_text()
    await chat.evaluate('''async()=>{
      const history=structuredClone(values['ui-history']);history[0].entries[0].status='ok';history[0].entries[0].detail='Вычисление завершено.';
      await chrome.storage.local.set({'ui-history':history,summary:{...values.summary,phase:'waiting',waitElapsed:15}});
    }''')
-   await chat.wait_for_function("document.querySelector('.psy-agent-step').textContent.includes('Готово')")
-   assert '15 с' in await chat.locator('.psy-agent-progress').inner_text()
+   await chat.wait_for_function("document.querySelector('.deepseek-agent-step').textContent.includes('Готово')")
+   assert '15 с' in await chat.locator('.deepseek-agent-progress').inner_text()
    await chat.screenshot(path=str(OUT/f'chat-history-{theme}.png'))
    await settings.evaluate('''async()=>{
      chrome.tabs.onRemoved={addListener(){}};

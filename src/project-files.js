@@ -39,7 +39,7 @@ export class ProjectFiles {
     );
     const candidate = await showDirectoryPicker({
       mode: 'readwrite',
-      id: 'psy-agent-project'
+      id: 'deepseek-agent-project'
     });
     await this.requestAccess(candidate);
     try {

@@ -116,7 +116,7 @@ export function mountFinalAnswers(getAnswers, {
           entry.css = null;
         }
         const card = entry.card;
-        const className = final ? 'psy-agent-final' : step ? 'psy-agent-step' : 'psy-agent-task';
+        const className = final ? 'deepseek-agent-final' : step ? 'deepseek-agent-step' : 'deepseek-agent-task';
         if (card.className !== className) card.className = className;
         if (step && card.dataset.status !== step.status) card.dataset.status = step.status;
         const css = `display:block;color:${ink};font:inherit;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:0;border:0;background:transparent`;
@@ -140,7 +140,7 @@ export function mountFinalAnswers(getAnswers, {
     }
   });
   const observer = new MutationObserver(records => {
-    if (records.every(record => (record.target.nodeType === 1 ? record.target : record.target.parentElement)?.closest('.psy-agent-step,.psy-agent-final,.psy-agent-task'))) return;
+    if (records.every(record => (record.target.nodeType === 1 ? record.target : record.target.parentElement)?.closest('.deepseek-agent-step,.deepseek-agent-final,.deepseek-agent-task'))) return;
     if (timer) return;
     timer = setTimeout(() => {
       timer = null;

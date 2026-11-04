@@ -2,7 +2,7 @@ import {
   projectTask
 } from './ui-state.js';
 export class StateStore {
-  constructor(name = 'psy-agent') {
+  constructor(name = 'deepseek-agent') {
     this.name = name;
   }
   async init() {
@@ -66,7 +66,7 @@ export class StateStore {
     await this.saveProjection(s);
   }
   async saveProjection(s) {
-    if (this.name === 'psy-agent') {
+    if (this.name === 'deepseek-agent') {
       const summary = projectTask(s);
       const values = {
         summary

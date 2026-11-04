@@ -59,18 +59,18 @@ def package():
     files.append(("CHECKSUMS.sha256", checksums.encode("utf-8")))
 
     DIST.mkdir(exist_ok=True)
-    archive = DIST / "psy-agent.zip"
+    archive = DIST / "deepseek-agent.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as output:
         for name, data in files:
-            entry = zipfile.ZipInfo(f"psy-agent/{name}", date_time=(1980, 1, 1, 0, 0, 0))
+            entry = zipfile.ZipInfo(f"deepseek-agent/{name}", date_time=(1980, 1, 1, 0, 0, 0))
             entry.external_attr = 0o100644 << 16
             entry.compress_type = zipfile.ZIP_DEFLATED
             output.writestr(entry, data)
     with zipfile.ZipFile(archive) as output:
         if output.testzip() is not None:
             raise ValueError("ZIP integrity check failed")
-    (DIST / "psy-agent.zip.sha256").write_text(
-        f"{sha256(archive.read_bytes())}  psy-agent.zip\n", encoding="utf-8"
+    (DIST / "deepseek-agent.zip.sha256").write_text(
+        f"{sha256(archive.read_bytes())}  deepseek-agent.zip\n", encoding="utf-8"
     )
     print(f"Packaged {len(files)} files: {archive.name} ({archive.stat().st_size} bytes)")
 

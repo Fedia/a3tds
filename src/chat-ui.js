@@ -39,7 +39,7 @@
   engineShadow.append(executor);
   document.documentElement.append(engineHost);
   const host = document.createElement('div');
-  host.dataset.psyAgentToolbar = '';
+  host.dataset.deepseekAgentToolbar = '';
   host.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;flex:0 0 auto;max-width:100%;min-width:0';
   const shadow = host.attachShadow({
     mode: 'closed'
@@ -75,7 +75,7 @@
   bar.append(label, badge, settings);
   shadow.append(style, bar);
   const progress = document.createElement('div');
-  progress.className = 'psy-agent-progress';
+  progress.className = 'deepseek-agent-progress';
   progress.setAttribute('role', 'status');
   progress.setAttribute('aria-live', 'polite');
   progress.style.cssText = 'display:none;flex:0 0 auto;padding:6px 12px;font:13px/1.45 system-ui;overflow-wrap:anywhere;max-width:100%;box-sizing:border-box';
@@ -124,7 +124,7 @@
   };
 
   function place() {
-    document.querySelectorAll('[data-psy-agent-toolbar]').forEach(node => {
+    document.querySelectorAll('[data-deepseek-agent-toolbar]').forEach(node => {
       if (node !== host) node.remove();
     });
     if (location.href !== lastURL) {
@@ -326,15 +326,15 @@
           let outlined;
           const restore = () => {
             if (outlined) {
-              outlined.style.outline = outlined.dataset.psyOldOutline || '';
-              delete outlined.dataset.psyOldOutline;
+              outlined.style.outline = outlined.dataset.agentOldOutline || '';
+              delete outlined.dataset.agentOldOutline;
             }
           };
           const move = e => {
             if (hint.contains(e.target)) return;
             restore();
             outlined = e.target;
-            outlined.dataset.psyOldOutline = outlined.style.outline;
+            outlined.dataset.agentOldOutline = outlined.style.outline;
             outlined.style.outline = '3px solid #00a896';
           };
           const cleanup = () => {

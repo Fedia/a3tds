@@ -40,10 +40,10 @@ jobs:
       - name: Upload extension archive
         uses: actions/upload-artifact@v4
         with:
-          name: psy-agent-${{ github.sha }}
+          name: deepseek-agent-${{ github.sha }}
           path: |
-            dist/psy-agent.zip
-            dist/psy-agent.zip.sha256
+            dist/deepseek-agent.zip
+            dist/deepseek-agent.zip.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -58,7 +58,7 @@ jobs:
       - name: Download verified ZIP
         uses: actions/download-artifact@v4
         with:
-          name: psy-agent-${{ github.sha }}
+          name: deepseek-agent-${{ github.sha }}
           path: dist
 
       - name: Publish prerelease
@@ -69,9 +69,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          (cd dist && sha256sum --check psy-agent.zip.sha256)
+          (cd dist && sha256sum --check deepseek-agent.zip.sha256)
           cat > release-notes.md <<'NOTES'
-          Распакуйте psy-agent.zip и загрузите папку psy-agent через chrome://extensions → Режим разработчика → Загрузить распакованное расширение.
+          Распакуйте deepseek-agent.zip и загрузите папку deepseek-agent через chrome://extensions → Режим разработчика → Загрузить распакованное расширение.
 
           Агент выполняет обычные блоки Python из ответов DeepSeek последовательно. Python управляет рабочими вкладками, получает DOM и разбирает HTML через локальный BeautifulSoup. Финальный ответ — обычный текст.
 
@@ -86,9 +86,9 @@ jobs:
           Это предварительная версия. Тестовая модель и фикстуры не заменяют проверку авторизованного DeepSeek. Установка в Windows/macOS и Titanium на устройстве требует ручной приёмки.
           NOTES
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" dist/psy-agent.zip dist/psy-agent.zip.sha256 --clobber
+            gh release upload "$TAG_NAME" dist/deepseek-agent.zip dist/deepseek-agent.zip.sha256 --clobber
           else
-            gh release create "$TAG_NAME" dist/psy-agent.zip dist/psy-agent.zip.sha256 \
+            gh release create "$TAG_NAME" dist/deepseek-agent.zip dist/deepseek-agent.zip.sha256 \
               --verify-tag --title "Агент для DeepSeek $TAG_NAME" \
               --notes-file release-notes.md --prerelease
           fi

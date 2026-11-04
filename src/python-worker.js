@@ -1,5 +1,5 @@
 /* Persistent, sequential Python interpreter with a mounted project and browser RPC. */
-self.PSY_BASE = new URL('../', self.location.href).href;
+self.AGENT_BASE = new URL('../', self.location.href).href;
 const nativeFetch = self.fetch.bind(self),
   remoteWheels = new Map(),
   browserReplies = new Map();
@@ -60,10 +60,10 @@ WebAssembly.instantiateStreaming = async (source, imports, options) => {
   }
 };
 self.fetch = async (input, options = {}) => {
-  const url = new URL(input?.url || String(input), self.PSY_BASE),
-    vendor = new URL('vendor/pyodide/', self.PSY_BASE).href;
+  const url = new URL(input?.url || String(input), self.AGENT_BASE),
+    vendor = new URL('vendor/pyodide/', self.AGENT_BASE).href;
   const remote = url.href.startsWith(vendor) ? remoteWheels.get(decodeURIComponent(url.pathname.split('/').at(-1))) :
-    !url.href.startsWith(self.PSY_BASE) ? url.href : null;
+    !url.href.startsWith(self.AGENT_BASE) ? url.href : null;
   if (!remote) return nativeFetch(input, options);
   if (String(options.method || input?.method || 'GET').toUpperCase() !== 'GET' || options.body || input?.body) throw new Error('Загрузчик разрешает только GET пакетов');
   if (packageCount++ === 0) packagePhase = current?.phase || 'packages';
@@ -108,7 +108,7 @@ async function initialize() {
     onProgress: detail => phase('packages', detail)
   });
   await client.init();
-  const vendor = new URL('vendor/pyodide/', self.PSY_BASE);
+  const vendor = new URL('vendor/pyodide/', self.AGENT_BASE);
   const [lock, bundled] = await Promise.all([nativeFetch(new URL('pyodide-lock.json', vendor)).then(r => r.json()), nativeFetch(new URL('PACKAGES.json', vendor)).then(r => r.json())]);
   const local = new Set(Object.values(bundled).map(p => p.file_name));
   for (const p of Object.values(lock.packages))
@@ -129,7 +129,7 @@ async function initialize() {
       operations
     });
   });
-  const api = await nativeFetch(new URL('src/agent-api.py', self.PSY_BASE)).then(r => r.text());
+  const api = await nativeFetch(new URL('src/agent-api.py', self.AGENT_BASE)).then(r => r.text());
   py.globals.set('__agent_api_source', api);
   py.globals.set('__agent_rpc', async (method, argsJSON) => {
     project.flush();

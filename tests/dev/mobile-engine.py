@@ -104,8 +104,8 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   }""")
   assert await chat.locator('.answer').count()>=2
   assert (await chat.locator('.answer').last.inner_text()).startswith('Сумма равна 6')
-  await chat.wait_for_selector('.psy-agent-step')
-  assert 'Готово' in await chat.locator('.psy-agent-step').first.inner_text()
+  await chat.wait_for_selector('.deepseek-agent-step')
+  assert 'Готово' in await chat.locator('.deepseek-agent-step').first.inner_text()
   frame=next(f for f in chat.frames if f.url==EXT+'executor.html')
   result=await frame.evaluate("""async path=>{
     let d=await(await navigator.storage.getDirectory()).getDirectoryHandle('agent-results');
@@ -118,8 +118,8 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   assert await settings.evaluate('document.documentElement.scrollWidth <= innerWidth')
   async with settings.expect_download() as pending:
    await settings.locator('#files li').filter(has_text=Path(result_path).name).locator('button').click()
-  download=await pending.value;await download.save_as(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json'))
-  assert json.load(open(str(Path(tempfile.gettempdir())/'psy-agent-mobile-test-result.json')) )['sum']==6
+  download=await pending.value;await download.save_as(str(Path(tempfile.gettempdir())/'deepseek-agent-mobile-test-result.json'))
+  assert json.load(open(str(Path(tempfile.gettempdir())/'deepseek-agent-mobile-test-result.json')) )['sum']==6
   await settings.close()
   await frame.evaluate("""async()=>{
     const {PythonRuntime}=await import('/src/python-runtime.js');window.originalReset=PythonRuntime.prototype.reset;
@@ -130,7 +130,7 @@ const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=funct
   await other.add_script_tag(url=EXT+'src/chat-ui.js');await other.wait_for_function("()=>window.testShadow?.host.isConnected && typeof testShadow.querySelector('input')?.onchange==='function'")
   await other.evaluate("testShadow.querySelector('input').click()")
   await other.wait_for_function("()=>Object.hasOwn(window,'readyReply')")
-  assert await other.evaluate("readyReply?.ok"),await other.evaluate("({readyReply,progress:document.querySelector('.psy-agent-progress')?.textContent})")
+  assert await other.evaluate("readyReply?.ok"),await other.evaluate("({readyReply,progress:document.querySelector('.deepseek-agent-progress')?.textContent})")
   await other.locator('#composer').fill('Новая задача в другом чате');await other.locator('#send').tap()
   for i in range(100):
    if shared.get('summary',{}).get('ownerTabId')==3 and shared['summary'].get('status')=='completed':break

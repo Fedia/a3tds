@@ -189,7 +189,7 @@ export function deepseekDOM(action, config, payload) {
   if (action === 'reveal-latest') {
     // This scroll container exists in the supplied DOM. No service APIs or tokens.
     const list = document.querySelector('.ds-virtual-list,[role="log"]');
-    if (!list || globalThis.__psyAgentScroll?.reading) return {
+    if (!list || globalThis.__deepseekAgentScroll?.reading) return {
       revealed: false,
       reason: list ? 'reading-history' : 'no-list'
     };
