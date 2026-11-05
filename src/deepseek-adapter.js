@@ -1,4 +1,7 @@
 import {
+  conversationURL
+} from './chat-sessions.js';
+import {
   assert,
   sleep,
   timeout
@@ -25,13 +28,15 @@ export class DeepSeekAdapter {
       'Нужна отдельная вкладка chat.deepseek.com');
     config ||= {};
     this.tabId = tabId;
+    this.conversation = conversationURL(tab.url);
+    this.submitted = false;
     this.config = config;
     await this.store.put('deepseek', {
       tabId,
       config
     });
     await chrome.storage.session.set({
-      'deepseek-bound-tab': tabId
+      ['deepseek-bound-tab:' + this.store.chatId]: tabId
     });
     return this.inspect();
   }
@@ -39,14 +44,17 @@ export class DeepSeekAdapter {
     const x = await this.store.get('deepseek');
     if (x) {
       this.config = (await chrome.storage.local.get('chat-bindings'))['chat-bindings'] || x.config || {};
-      const bound = await chrome.storage.session.get('deepseek-bound-tab');
-      if (bound['deepseek-bound-tab'] === x.tabId) this.tabId = x.tabId;
+      const bound = await chrome.storage.session.get('deepseek-bound-tab:' + this.store.chatId);
+      if (bound['deepseek-bound-tab:' + this.store.chatId] === x.tabId) this.tabId = x.tabId;
     }
   }
   async dom(action, payload) {
     assert(this.tabId && this.config, 'Подключите DeepSeek');
     const tab = await chrome.tabs.get(this.tabId);
     assert(new URL(tab.url).origin === 'https://chat.deepseek.com', 'Вкладка модели сменила адрес');
+    const current = conversationURL(tab.url);
+    assert(!this.conversation || this.conversation === current, 'Вкладка перешла в другой диалог');
+    assert(this.conversation || !current || this.submitted || !['send', 'submit'].includes(action), 'Диалог сменился до отправки задачи');
     const [r] = await timeout(chrome.scripting.executeScript({
       target: {
         tabId: this.tabId
@@ -54,6 +62,7 @@ export class DeepSeekAdapter {
       func: deepseekDOM,
       args: [action, this.config, payload ?? null]
     }), 15000, 'DeepSeek DOM');
+    if (action === 'submit' && r.result?.attempted !== false) this.submitted = true;
     return r.result;
   }
   async conversationURL() {

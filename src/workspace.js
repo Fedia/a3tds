@@ -1,3 +1,6 @@
+import {
+  ChatSessions
+} from './chat-sessions.js';
 /** Compact settings. Execution stays in the chat; diagnostics and binding are secondary. */
 import {
   StateStore
@@ -12,9 +15,10 @@ import {
   assert
 } from './util.js';
 const $ = s => document.querySelector(s);
-const store = await new StateStore().init(),
+const baseStore = await new StateStore().init();
+const sessions = new ChatSessions(baseStore);
+let store = baseStore,
   files = new ProjectFiles(store);
-await files.restore();
 let selected = null,
   stored = null,
   accessType = null,
@@ -46,9 +50,7 @@ async function command(name, extra = {}) {
   return result.data;
 }
 async function idle() {
-  const {
-    summary
-  } = await chrome.storage.local.get('summary');
+  const summary = (await chrome.storage.local.get(store.summaryKey))[store.summaryKey];
   if (selected && ['running', 'paused'].includes(summary?.status)) {
     const status = await command('status');
     assert(!status.active && !status.computing, 'Сначала остановите агента в чате');
@@ -60,10 +62,7 @@ async function tabs() {
     url: 'https://chat.deepseek.com/*'
   });
   const context = await chrome.storage.session?.get('settings-chat-tab') || {};
-  const {
-    summary
-  } = await chrome.storage.local.get('summary');
-  const desired = context['settings-chat-tab'] || selected || summary?.ownerTabId;
+  const desired = context['settings-chat-tab'] || selected;
   selected = available.find(t => t.id === desired)?.id || available.find(t => t.active)?.id || available[0]?.id || null;
   $('#deepseek-tab').replaceChildren(...available.map(tab => {
     const option = document.createElement('option');
@@ -75,6 +74,14 @@ async function tabs() {
   $('#chat-choice').hidden = available.length < 2;
 }
 async function render() {
+  if (selected) {
+    const tab = available.find(tab => tab.id === selected);
+    const id = await sessions.resolve(selected, tab.url);
+    if (store.chatId !== id) {
+      store = baseStore.forChat(id);
+      files = new ProjectFiles(store);
+    }
+  }
   await files.restore();
   $('#folder-name').textContent = files.mode === 'browser' ? 'Внутри браузера' : files.root?.name || 'Не выбрано';
   $('#folder').textContent = files.root ? 'Изменить' : 'Выбрать';
@@ -124,6 +131,8 @@ async function render() {
   $('#file-count').textContent = paths.length ? `Файлы · ${paths.length}` : 'Файлы результатов';
   $('#files-empty').hidden = paths.length > 0;
   $('#files').replaceChildren(...paths.map(path => {
+    const fileStore = store,
+      fileAccess = files;
     const li = document.createElement('li'),
       name = document.createElement('span'),
       button = document.createElement('button');
@@ -133,9 +142,9 @@ async function render() {
     button.setAttribute('aria-label', 'Скачать ' + name.textContent);
     button.onclick = async () => {
       try {
-        const current = await store.get('task');
+        const current = await fileStore.get('task');
         assert(current?.files.includes(path), 'Файл больше не относится к текущей задаче');
-        const file = await files.file(path),
+        const file = await fileAccess.file(path),
           url = URL.createObjectURL(file),
           link = document.createElement('a');
         link.href = url;

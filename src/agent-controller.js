@@ -97,7 +97,7 @@ export class AgentController {
       status: 'error',
       error: {
         code: 'SCRIPT_INTERRUPTED',
-        message: 'Предыдущий сценарий прерван. Часть браузерных действий и записей могла выполниться. Переменные могли потеряться. Прочитай свои файлы/checkpoint и проверь текущую страницу перед продолжением; не повторяй весь сценарий вслепую.'
+        message: 'Предыдущий сценарий прерван. Часть браузерных действий и записей могла выполниться. Переменные могли потеряться. Прочитай свои файлы/checkpoint и проверь текущую страницу перед продолжением; не повторяй весь сценарий вслепую. ' + (this.s.recoveryNotice || '')
       }
     };
     this.s.commands[pending.command.id] = {
@@ -275,7 +275,11 @@ export class AgentController {
     }
   }
   async acceptReply(raw) {
-    if (this.model.conversationURL) this.s.modelChatURL = await this.model.conversationURL();
+    if (this.model.conversationURL) {
+      const url = await this.model.conversationURL();
+      await this.onConversation?.(url);
+      this.s.modelChatURL = url;
+    }
     this.s.received = raw;
     this.s.receivedMeta = {
       wireKey: responseUIKey(raw),

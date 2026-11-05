@@ -6,12 +6,28 @@ export class ProjectFiles {
   constructor(store, preferences = chrome.storage.local) {
     this.store = store;
     this.preferences = preferences;
+    this.configKey = store.chatId ? "project:" + store.chatId : null;
   }
   async restore() {
-    const preferences = await this.preferences.get(['file-mode', 'file-revision']);
-    const mode = preferences['file-mode'],
-      revision = preferences['file-revision'];
-    // Keep the live, authorized handle. Rehydrate only when the selection or grant changes.
+    let preferences = await this.preferences.get(['file-mode', 'file-revision', ...(this.configKey ? [this.configKey] : [])]);
+    if (this.configKey && !preferences[this.configKey]) {
+      await navigator.locks.request('project-config:' + this.store.chatId, async () => {
+        preferences = await this.preferences.get(['file-mode', 'file-revision', this.configKey]);
+        if (preferences[this.configKey]) return;
+        const directory = await this.store.global().get('directory');
+        if (directory) await this.store.put('directory', directory);
+        await this.preferences.set({
+          [this.configKey]: {
+            mode: preferences['file-mode'],
+            revision: crypto.randomUUID()
+          }
+        });
+        preferences = await this.preferences.get([this.configKey]);
+      });
+    }
+    const config = this.configKey ? preferences[this.configKey] : null;
+    const mode = config ? config.mode : preferences['file-mode'];
+    const revision = config ? config.revision : preferences['file-revision'];
     if (this.root && this.mode === mode && this.revision === revision) return;
     this.mode = mode;
     if (mode === 'browser') {
@@ -22,11 +38,21 @@ export class ProjectFiles {
     } else this.root = await this.store.get('directory');
     this.revision = revision;
   }
-  async useBrowserStorage() {
-    await this.preferences.set({
-      'file-mode': 'browser',
-      'file-revision': crypto.randomUUID()
+  async saveConfig(mode, revision = crypto.randomUUID(), defaults = false) {
+    const values = this.configKey ? {
+      [this.configKey]: {
+        mode,
+        revision
+      }
+    } : {};
+    if (!this.configKey || defaults) Object.assign(values, {
+      'file-mode': mode,
+      'file-revision': revision
     });
+    await this.preferences.set(values);
+  }
+  async useBrowserStorage() {
+    await this.saveConfig('browser', crypto.randomUUID(), true);
     await this.restore();
   }
   async file(path) {
@@ -50,13 +76,11 @@ export class ProjectFiles {
       if (e.name !== 'NotFoundError' && e.name !== 'SyntaxError') throw e;
     }
     await this.store.put('directory', candidate);
+    if (this.store.chatId) await this.store.global().put('directory', candidate);
     this.mode = 'directory';
     this.root = candidate;
     this.revision = crypto.randomUUID();
-    await this.preferences.set({
-      'file-mode': 'directory',
-      'file-revision': this.revision
-    });
+    await this.saveConfig('directory', this.revision, true);
   }
   async requestAccess(root) {
     if (await root.queryPermission({
@@ -80,9 +104,7 @@ export class ProjectFiles {
     // Other extension contexts must refresh their handle after an explicit grant.
     await this.store.put('directory', this.root);
     this.revision = crypto.randomUUID();
-    await this.preferences.set({
-      'file-revision': this.revision
-    });
+    await this.saveConfig(this.mode, this.revision);
   }
   async permission() {
     if (this.mode === 'browser') {

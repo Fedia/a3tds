@@ -13,7 +13,7 @@ async def main():
   for theme in ['light','dark']:
    context=await browser.new_context(viewport={'width':390,'height':844},is_mobile=True,has_touch=True,color_scheme=theme)
    await context.add_init_script('''window.allShadows=[];const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=function(o){const s=attach.call(this,o);allShadows.push(s);window.testShadow=s;return s};window.storageListeners=[];window.siteAccess=true;window.values={'file-mode':'browser','browser-mode':'auto','chat-bindings':{input:'#composer',send:'#send'}};
-   window.sent=[];window.chrome={runtime:{id:'test-extension',getURL:p=>location.origin+'/'+p,onMessage:{addListener:f=>window.receive=f},sendMessage:async m=>{sent.push(m);return {ok:true,data:m.type==='engine-ping'?{tabId:1,chatURL:location.href}:{capabilities:{debugger:true,scripting:true}}}}},storage:{local:{get:async keys=>Object.fromEntries((typeof keys==='string'?[keys]:keys).map(k=>[k,values[k]])),set:async data=>{Object.assign(values,data);for(const f of storageListeners)f(Object.fromEntries(Object.entries(data).map(([k,v])=>[k,{newValue:v}])),'local')}},session:{get:async()=>({'settings-chat-tab':1}),set:async()=>{}},onChanged:{addListener:f=>storageListeners.push(f)}},tabs:{query:async()=>[{id:1,url:'https://chat.deepseek.com/a/chat/test',title:'DeepSeek',active:true}],update:async()=>({id:1}),sendMessage:async()=>({ok:true})},permissions:{contains:async()=>siteAccess,request:async()=>{siteAccess=true;return true}},scripting:{executeScript:async()=>[{result:{status:'ready'}}]}};
+   window.sent=[];window.chrome={runtime:{id:'test-extension',getURL:p=>location.origin+'/'+p,onMessage:{addListener:f=>window.receive=f},sendMessage:async m=>{sent.push(m);return {ok:true,data:m.type==='engine-ping'?{tabId:1,chatId:'ui-chat',chatURL:location.href}:{capabilities:{debugger:true,scripting:true}}}}},storage:{local:{get:async keys=>Object.fromEntries((typeof keys==='string'?[keys]:keys).map(k=>[k,values[k]])),set:async data=>{Object.assign(values,data);for(const f of storageListeners)f(Object.fromEntries(Object.entries(data).map(([k,v])=>[k,{newValue:v}])),'local')}},session:{get:async()=>({'settings-chat-tab':1}),set:async()=>{}},onChanged:{addListener:f=>storageListeners.push(f)}},tabs:{query:async()=>[{id:1,url:'https://chat.deepseek.com/a/chat/test',title:'DeepSeek',active:true}],update:async()=>({id:1}),sendMessage:async()=>({ok:true})},permissions:{contains:async()=>siteAccess,request:async()=>{siteAccess=true;return true}},scripting:{executeScript:async()=>[{result:{status:'ready'}}]}};
    ''')
    settings=await context.new_page();await settings.goto(BASE+'workspace.html');await settings.wait_for_function("document.querySelector('#chat-status').textContent==='Подключён'")
    assert not await settings.locator('#advanced').get_attribute('open')
@@ -27,7 +27,7 @@ async def main():
    assert await settings.locator('#access-row').is_hidden()
    chat=await context.new_page();await chat.route('**/executor.html',lambda r:r.fulfill(body='<html></html>',content_type='text/html'))
    await chat.goto(BASE+'fixtures/chat-ui.html')
-   await chat.evaluate("values.summary={taskId:'t',ownerTabId:1,ownerURL:location.href,status:'paused',message:'Ответ DeepSeek пока не подтверждён. Можно написать продолжай. Можно написать продолжай.',current:'Повторно объединить темы',savedPages:4};values['agent-data-notice']=true")
+   await chat.evaluate("values['summary:ui-chat']={taskId:'t',ownerTabId:1,ownerURL:location.href,status:'paused',message:'Ответ DeepSeek пока не подтверждён. Можно написать продолжай. Можно написать продолжай.',current:'Повторно объединить темы',savedPages:4};values['agent-data-notice']=true")
    await chat.add_script_tag(url=BASE+'src/chat-ui.js');await chat.wait_for_timeout(400)
    await chat.evaluate("testShadow.querySelector('input').click()");await chat.wait_for_timeout(200)
    bounds=await chat.evaluate('''()=>{const r=testShadow.host.getBoundingClientRect();return {height:r.height,position:getComputedStyle(testShadow.host).position}}''')
@@ -50,12 +50,12 @@ async def main():
    await chat.evaluate('''async()=>{
      const {responseUIKey}=await import('/src/tool-format.js');const raw=document.querySelector('#answer').textContent;const command={description:'Выполнить сценарий'};
      const entry={responseKey:responseUIKey(raw),description:command.description,status:'running',detail:''};
-     await chrome.storage.local.set({'ui-history':[{taskId:'t',chatURL:location.href,entries:[entry]}],summary:{...values.summary,status:'running',phase:'executing',current:command.description,message:''}});
+     await chrome.storage.local.set({'history:ui-chat':[{taskId:'t',chatURL:location.href,entries:[entry]}],'summary:ui-chat':{...values['summary:ui-chat'],status:'running',phase:'executing',current:command.description,message:''}});
    }''')
    await chat.wait_for_selector('.deepseek-agent-step');assert 'Выполняется' in await chat.locator('.deepseek-agent-step').inner_text()
    await chat.evaluate('''async()=>{
-     const history=structuredClone(values['ui-history']);history[0].entries[0].status='ok';history[0].entries[0].detail='Вычисление завершено.';
-     await chrome.storage.local.set({'ui-history':history,summary:{...values.summary,phase:'waiting',waitElapsed:15}});
+     const history=structuredClone(values['history:ui-chat']);history[0].entries[0].status='ok';history[0].entries[0].detail='Вычисление завершено.';
+     await chrome.storage.local.set({'history:ui-chat':history,'summary:ui-chat':{...values['summary:ui-chat'],phase:'waiting',waitElapsed:15}});
    }''')
    await chat.wait_for_function("document.querySelector('.deepseek-agent-step').textContent.includes('Готово')")
    assert '15 с' in await chat.locator('.deepseek-agent-progress').inner_text()

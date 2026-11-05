@@ -13,6 +13,10 @@ export class PythonRuntime {
     this.running = false;
   }
   async bindScope(chatURL, project) {
+    if (chatURL) {
+      const url = new URL(chatURL);
+      chatURL = url.origin + (url.pathname.replace(/\/+$/, '') || '/');
+    }
     const epoch = this.scopeEpoch = (this.scopeEpoch || 0) + 1;
     const sameChat = !this.chatURL || this.chatURL === chatURL || ['/', '/a/chat', '/a/chat/'].includes(new URL(this.chatURL).pathname);
     const sameProject = !this.project || this.project === project ||
@@ -23,15 +27,30 @@ export class PythonRuntime {
     this.project = project;
   }
   async flush() {
-    const previousError = await this.writes.then(() => null, error => error);
-    await this.sync?.flush();
-    if (previousError && !previousError.staged) throw previousError;
+    let error = await this.writes.then(() => null, value => value);
+    try {
+      await this.sync?.flush();
+    } catch (value) {
+      error = value;
+    }
+    if (error?.code === 'PROJECT_CONFLICT') {
+      await this.onFiles?.((error.conflictFiles || []).map(path => ({
+        type: 'write',
+        path
+      })));
+      this.sync.resetConflict();
+      this.writes = Promise.resolve();
+      throw error;
+    }
+    if (error && !error.staged) throw error;
+    // A still-failing filesystem export must not be mistaken for a recovered grant.
+    if ((await this.sync?.store.get('project-write-queue'))?.length) throw error || new Error('Записи ещё не сохранены');
   }
-  queueChanges(root, operations, onFiles) {
+  queueChanges(root, operations, onFiles, baseline) {
     // Keep staging later records even if an earlier export needs renewed permission.
     this.writes = this.writes.catch(() => {}).then(async () => {
       assert(this.sync, 'Не подключена очередь сохранения проекта');
-      await this.sync.submit(root, operations);
+      await this.sync.submit(root, operations, baseline);
       await onFiles?.(operations);
     });
     this.writes.catch(() => {});
@@ -44,6 +63,9 @@ export class PythonRuntime {
     await this.flush();
     assert(generation === (this.generation || 0), 'Запуск Python отменён');
     assert(!this.running, 'Python уже выполняется');
+    const baseline = await this.sync?.prepare(this.project);
+    assert(!this.running, 'Python уже выполняется');
+    assert(generation === (this.generation || 0), 'Запуск Python отменён');
     const reused = !!this.ready;
     if (!this.worker) {
       this.sessionId = crypto.randomUUID();
@@ -126,7 +148,7 @@ export class PythonRuntime {
         }
         if (message.requestId !== requestId) return;
         if (message.type === 'project-change') {
-          this.queueChanges(this.project, message.operations, this.onFiles);
+          this.queueChanges(this.project, message.operations, this.onFiles, baseline);
           return;
         }
         if (message.type === 'python-browser') {
@@ -196,7 +218,14 @@ export class PythonRuntime {
             finish(null, message);
           }
         } catch (error) {
-          error.code = 'PROJECT_SYNC_FAILED';
+          if (error.code === 'PROJECT_CONFLICT') {
+            await this.onFiles?.((error.conflictFiles || []).map(path => ({
+              type: 'write',
+              path
+            })));
+            this.sync.resetConflict();
+            this.writes = Promise.resolve();
+          } else error.code = 'PROJECT_SYNC_FAILED';
           finish(error, null, true);
         }
       };

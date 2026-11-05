@@ -18,7 +18,21 @@ export class PythonProject {
       if (!this.mounted) {
         await this.py.mountNativeFS('/project', handle);
         this.mounted = true;
-      } else await new Promise((resolve, reject) => this.fs.syncfs(true, error => error ? reject(error) : resolve()));
+      } else {
+        // NativeFS normally compares mtimes. Always pull authoritative disk bytes:
+        // another interpreter may write in the same millisecond, or Python may
+        // have set a future mtime in its cached filesystem.
+        const invalidate = path => {
+          for (const name of this.fs.readdir(path)) {
+            if (name === '.' || name === '..') continue;
+            const child = path + '/' + name;
+            if (this.fs.isDir(this.fs.lstat(child).mode)) invalidate(child);
+            this.fs.utime(child, -1, -1);
+          }
+        };
+        invalidate('/project');
+        await new Promise((resolve, reject) => this.fs.syncfs(true, error => error ? reject(error) : resolve()));
+      }
       this.dirty.clear();
     } finally {
       this.muted--;
@@ -106,6 +120,7 @@ export class PythonProject {
       }]);
     });
     wrap('rename', ([from, to]) => {
+      if (from === to) return;
       const operations = self.quiet(() => self.snapshot(to));
       if (self.relative(from)) operations.push({
         type: 'remove',

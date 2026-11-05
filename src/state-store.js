@@ -2,8 +2,9 @@ import {
   projectTask
 } from './ui-state.js';
 export class StateStore {
-  constructor(name = 'deepseek-agent') {
+  constructor(name = 'deepseek-agent', chatId = '') {
     this.name = name;
+    this.chatId = chatId;
   }
   async init() {
     this.db = await new Promise((resolve, reject) => {
@@ -14,9 +15,26 @@ export class StateStore {
     });
     return this;
   }
+  forChat(chatId) {
+    const view = new StateStore(this.name, chatId);
+    view.db = this.db;
+    return view;
+  }
+  global() {
+    return this.forChat('');
+  }
+  key(key) {
+    return this.chatId ? 'chat:' + this.chatId + ':' + key : key;
+  }
+  get summaryKey() {
+    return 'summary:' + this.chatId;
+  }
+  get historyKey() {
+    return 'history:' + this.chatId;
+  }
   async get(key) {
     return new Promise((resolve, reject) => {
-      const q = this.db.transaction('kv').objectStore('kv').get(key);
+      const q = this.db.transaction('kv').objectStore('kv').get(this.key(key));
       q.onsuccess = () => resolve(q.result);
       q.onerror = () => reject(q.error);
     });
@@ -29,7 +47,7 @@ export class StateStore {
   async putMany(entries) {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction('kv', 'readwrite');
-      for (const [key, value] of entries) tx.objectStore('kv').put(value, key);
+      for (const [key, value] of entries) tx.objectStore('kv').put(value, this.key(key));
       tx.oncomplete = resolve;
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
@@ -39,10 +57,10 @@ export class StateStore {
     await new Promise((resolve, reject) => {
       const tx = this.db.transaction('kv', 'readwrite'),
         kv = tx.objectStore('kv');
-      const q = kv.get('project-write-queue');
+      const q = kv.get(this.key('project-write-queue'));
       q.onsuccess = () => {
-        kv.put(record, 'project-change:' + record.id);
-        kv.put([...(q.result || []), record.id], 'project-write-queue');
+        kv.put(record, this.key('project-change:' + record.id));
+        kv.put([...(q.result || []), record.id], this.key('project-write-queue'));
       };
       tx.oncomplete = resolve;
       tx.onerror = tx.onabort = () => reject(tx.error);
@@ -52,16 +70,17 @@ export class StateStore {
     await new Promise((resolve, reject) => {
       const tx = this.db.transaction('kv', 'readwrite'),
         kv = tx.objectStore('kv');
-      const q = kv.get('project-write-queue');
+      const q = kv.get(this.key('project-write-queue'));
       q.onsuccess = () => {
-        kv.put((q.result || []).filter(item => item !== id), 'project-write-queue');
-        kv.delete('project-change:' + id);
+        kv.put((q.result || []).filter(item => item !== id), this.key('project-write-queue'));
+        kv.delete(this.key('project-change:' + id));
       };
       tx.oncomplete = resolve;
       tx.onerror = tx.onabort = () => reject(tx.error);
     });
   }
   async save(s) {
+    s.chatId ||= this.chatId;
     await this.put('task', structuredClone(s));
     await this.saveProjection(s);
   }
@@ -69,12 +88,12 @@ export class StateStore {
     if (this.name === 'deepseek-agent') {
       const summary = projectTask(s);
       const values = {
-        summary
+        [this.summaryKey]: summary
       };
       const historySignature = JSON.stringify([s.id, s.modelChatURL, summary.history]);
       if (summary.history.length && historySignature !== this.historySignature) {
-        const previous = (await chrome.storage.local.get('ui-history'))['ui-history'] || [];
-        values['ui-history'] = [...previous.filter(item => item.taskId !== s.id), {
+        const previous = (await chrome.storage.local.get(this.historyKey))[this.historyKey] || [];
+        values[this.historyKey] = [...previous.filter(item => item.taskId !== s.id), {
           taskId: s.id,
           chatURL: s.modelChatURL,
           entries: summary.history

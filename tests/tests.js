@@ -2,6 +2,10 @@ import {
   parseReply
 } from '../src/protocol.js';
 import {
+  ChatSessions,
+  conversationURL
+} from '../src/chat-sessions.js';
+import {
   assert,
   pathParts,
   safeURL,
@@ -329,30 +333,63 @@ test('Формат: максимум два запроса исправлени�
   assert(c.s.status === 'paused' && calls === 3 && !ran);
 });
 test('Неопределённая отправка: восстановление читает прежний ответ без повторного exchange', async () => {
-  let sends = 0, recovered = 0;
+  let sends = 0,
+    recovered = 0;
   const c = await controller({
-    exchange: async () => { sends++; throw Object.assign(Error('wait'), { code: 'RESPONSE_TIMEOUT' }); },
-    recoverExchange: async () => { recovered++; return 'Ответ уже получен'; }
+    exchange: async () => {
+      sends++;
+      throw Object.assign(Error('wait'), {
+        code: 'RESPONSE_TIMEOUT'
+      });
+    },
+    recoverExchange: async () => {
+      recovered++;
+      return 'Ответ уже получен';
+    }
   });
-  c.s.outbound = { phase: 'send-uncertain', before: {}, prompt: 'saved' };
+  c.s.outbound = {
+    phase: 'send-uncertain',
+    before: {},
+    prompt: 'saved'
+  };
   c.s.exchangeId = 'saved-exchange';
   await c.start();
   assert(c.s.status === 'completed' && !sends && recovered === 1 && !c.s.outbound);
 });
 test('Остановка во время подготовки не позволяет запустить новый Worker или отправку', async () => {
   let release, sends = 0;
-  const c = await controller({ exchange: async () => { sends++; return 'Готово'; } });
-  c.files = { permission: () => new Promise(resolve => { release = resolve; }) };
+  const c = await controller({
+    exchange: async () => {
+      sends++;
+      return 'Готово';
+    }
+  });
+  c.files = {
+    permission: () => new Promise(resolve => {
+      release = resolve;
+    })
+  };
   const starting = c.start();
   const rejected = fail(() => starting);
-  await c.stop(); release(); await rejected;
+  await c.stop();
+  release();
+  await rejected;
   assert(c.s.status === 'stopped' && !sends);
 });
 test('Ошибка сохранения приостанавливает цикл, не запускает бесконечные исправления модели', async () => {
   let sends = 0;
   const python = stubPython();
-  python.run = async () => { throw Object.assign(Error('folder unavailable'), { code: 'PROJECT_SYNC_FAILED' }); };
-  const c = await controller({ exchange: async () => { sends++; return block('pass'); } }, python);
+  python.run = async () => {
+    throw Object.assign(Error('folder unavailable'), {
+      code: 'PROJECT_SYNC_FAILED'
+    });
+  };
+  const c = await controller({
+    exchange: async () => {
+      sends++;
+      return block('pass');
+    }
+  }, python);
   await c.start();
   assert(c.s.status === 'paused' && c.s.pending && sends === 1);
 });
@@ -400,6 +437,148 @@ test('UI: история и финал подтверждаются состоя
   const ui = projectTask(s);
   assert(ui.history[0].detail.includes('Обработано: 2') && !ui.final);
   assert(progressText(ui).includes('Python'));
+});
+test('Разные чаты: состояние, архивы и очередь записи разделены', async () => {
+  const a = store.forChat('scope-a'),
+    b = store.forChat('scope-b');
+  await a.put('task', {
+    id: 'a',
+    status: 'running'
+  });
+  await b.put('task', {
+    id: 'b',
+    status: 'paused'
+  });
+  assert((await a.get('task')).id === 'a' && (await b.get('task')).id === 'b');
+  await a.enqueueProjectChange({
+    id: 'a-write',
+    root,
+    operations: []
+  });
+  assert((await a.get('project-write-queue')).length === 1 && !(await b.get('project-write-queue')));
+  await a.completeProjectChange('a-write');
+});
+test('Идентичность диалога сохраняется при reload, query не создаёт новый чат', async () => {
+  const sessions = new ChatSessions(store);
+  const a = await sessions.resolve(501, 'https://chat.deepseek.com/a/chat/alpha?x=1');
+  assert(a === await sessions.resolve(502, 'https://chat.deepseek.com/a/chat/alpha?x=2'));
+  assert(a !== await sessions.resolve(503, 'https://chat.deepseek.com/a/chat/beta'));
+  const draft = await sessions.resolve(504, 'https://chat.deepseek.com/');
+  assert(draft === await sessions.resolve(504, 'https://chat.deepseek.com/'));
+  assert(draft !== await sessions.resolve(505, 'https://chat.deepseek.com/'));
+  await sessions.promote(draft, 'https://chat.deepseek.com/a/chat/new');
+  assert(draft === await sessions.resolve(506, 'https://chat.deepseek.com/a/chat/new'));
+  assert(conversationURL('https://chat.deepseek.com/a/chat/') === null);
+});
+test('Web Locks: разные чаты выполняются вместе, копия того же чата блокируется', async () => {
+  let release;
+  const sessions = new ChatSessions(store);
+  const first = navigator.locks.request(sessions.lock('lock-a'), () => new Promise(resolve => {
+    release = resolve;
+  }));
+  while (!release) await sleep(5);
+  let independent, duplicate;
+  await navigator.locks.request(sessions.lock('lock-b'), {
+    ifAvailable: true
+  }, lock => {
+    independent = !!lock;
+  });
+  await navigator.locks.request(sessions.lock('lock-a'), {
+    ifAvailable: true
+  }, lock => {
+    duplicate = !!lock;
+  });
+  release();
+  await first;
+  assert(independent && !duplicate);
+});
+test('Общая папка: устаревшая запись сохраняется отдельной копией, актуальный файл не затирается', async () => {
+  const a = new ProjectSync(store.forChat('writer-a')),
+    b = new ProjectSync(store.forChat('writer-b'));
+  const bytes = text => new TextEncoder().encode(text);
+  await a.submit(root, [{
+    type: 'write',
+    path: 'shared.csv',
+    bytes: bytes('old')
+  }]);
+  const beforeA = await a.prepare(root),
+    beforeB = await b.prepare(root);
+  await a.submit(root, [{
+    type: 'write',
+    path: 'shared.csv',
+    bytes: bytes('from-a')
+  }], beforeA);
+  let conflict;
+  try {
+    await b.submit(root, [{
+      type: 'write',
+      path: 'shared.csv',
+      bytes: bytes('from-b')
+    }], beforeB);
+  } catch (error) {
+    conflict = error;
+  }
+  assert(conflict?.code === 'PROJECT_CONFLICT' && conflict.conflictFiles.length === 1);
+  assert(await (await (await root.getFileHandle('shared.csv')).getFile()).text() === 'from-a');
+  assert(await (await (await root.getFileHandle(conflict.conflictFiles[0])).getFile()).text() === 'from-b');
+  assert(!(await b.store.get('project-write-queue')).length);
+  b.resetConflict();
+  const fresh = await b.prepare(root);
+  await b.submit(root, [{
+    type: 'write',
+    path: 'shared.csv',
+    bytes: bytes('merged')
+  }], fresh);
+});
+test('Общая папка: удаление изменённого каталога отклоняется, разные файлы сохраняются параллельно', async () => {
+  const a = new ProjectSync(store.forChat('dir-a')),
+    b = new ProjectSync(store.forChat('dir-b'));
+  const bytes = text => new TextEncoder().encode(text);
+  await a.submit(root, [{
+    type: 'mkdir',
+    path: 'shared-dir'
+  }]);
+  const stale = await b.prepare(root);
+  await a.submit(root, [{
+    type: 'write',
+    path: 'shared-dir/new.txt',
+    bytes: bytes('new')
+  }]);
+  await fail(() => b.submit(root, [{
+    type: 'remove',
+    path: 'shared-dir'
+  }], stale));
+  assert((await (await root.getDirectoryHandle('shared-dir')).getFileHandle('new.txt')).kind === 'file');
+  b.resetConflict();
+  await Promise.all([
+    a.submit(root, [{
+      type: 'write',
+      path: 'parallel-a.txt',
+      bytes: bytes('a')
+    }], await a.prepare(root)),
+    b.submit(root, [{
+      type: 'write',
+      path: 'parallel-b.txt',
+      bytes: bytes('b')
+    }], await b.prepare(root))
+  ]);
+});
+test('Папка закреплена за чатом: изменение значения по умолчанию не меняет другой чат', async () => {
+  const values = {
+    'file-mode': 'browser'
+  };
+  const preferences = {
+    get: async keys => Object.fromEntries(keys.map(k => [k, values[k]])),
+    set: async data => Object.assign(values, data)
+  };
+  const a = new ProjectFiles(store.forChat('folder-a'), preferences),
+    b = new ProjectFiles(store.forChat('folder-b'), preferences);
+  await a.restore();
+  await b.restore();
+  const old = values[b.configKey].revision;
+  await a.saveConfig('browser', 'changed', true);
+  await b.restore();
+  assert(values[b.configKey].revision === old && b.revision === old);
 });
 test('Сквозной сценарий: один Python-блок обходит две страницы, пишет JSONL, CSV и отчёт в корень', async () => {
   const browser = new BrowserTools({

@@ -23,6 +23,7 @@
     config = {},
     picking = false,
     ownerTabId = null,
+    chatId = null,
     currentState = null,
     histories = [],
     lastURL = location.href;
@@ -84,9 +85,9 @@
   const send = message => chrome.runtime.sendMessage(message);
   const inputElement = () => deepseekDOM('elements', config).input;
   const nativeColor = () => getComputedStyle(inputElement() || document.body).color;
-  const activeState = () => belongsToChat(currentState, location.href, ownerTabId) ? currentState : null;
+  const activeState = () => belongsToChat(currentState, location.href, ownerTabId, chatId) ? currentState : null;
   const view = () => mountFinalAnswers(() => deepseekDOM('answer-elements', config), {
-    getHistory: () => histories.filter(item => item.chatURL === location.href).flatMap(item => item.entries),
+    getHistory: () => histories.flatMap(item => item.entries),
     color: nativeColor,
     preserveScroll: work => scroll.guard.preserve(work)
   });
@@ -130,7 +131,14 @@
     if (location.href !== lastURL) {
       const old = new URL(lastURL).pathname;
       lastURL = location.href;
-      if (enabled && !['/', '/a/chat', '/a/chat/'].includes(old)) {
+      const pathChanged = new URL(lastURL).pathname !== old;
+      if (pathChanged) {
+        chatId = null;
+        currentState = null;
+        histories = [];
+      }
+      void ensureExecutor().catch(() => {});
+      if (enabled && pathChanged && !['/', '/a/chat', '/a/chat/'].includes(old)) {
         enabled = false;
         toggle.checked = false;
         void send({
@@ -168,10 +176,11 @@
   window.addEventListener('resize', place);
   window.visualViewport?.addEventListener('resize', place);
   async function load() {
-    const values = await chrome.storage.local.get(['chat-bindings', 'summary', 'ui-history']);
+    const keys = ['chat-bindings', ...(chatId ? ['summary:' + chatId, 'history:' + chatId] : [])];
+    const values = await chrome.storage.local.get(keys);
     config = values['chat-bindings'] || {};
-    currentState = values.summary || null;
-    histories = values['ui-history'] || [];
+    currentState = values['summary:' + chatId] || null;
+    histories = values['history:' + chatId] || [];
 
   }
   async function ensureExecutor() {
@@ -182,6 +191,9 @@
         });
         if (result?.ok) {
           ownerTabId = result.data?.tabId ?? ownerTabId;
+          chatId = result.data?.chatId ?? chatId;
+          await load();
+          unmountView.refresh?.();
           paint();
           return;
         }
@@ -197,11 +209,13 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes['chat-bindings']) config = changes['chat-bindings'].newValue || {};
-    if (changes.summary) currentState = changes.summary.newValue || null;
-    if (changes['ui-history']) histories = changes['ui-history'].newValue || [];
-    if (changes.summary) transient = '';
+    const summaryChange = chatId && changes['summary:' + chatId];
+    const historyChange = chatId && changes['history:' + chatId];
+    if (summaryChange) currentState = summaryChange.newValue || null;
+    if (historyChange) histories = historyChange.newValue || [];
+    if (summaryChange) transient = '';
     paint();
-    if (changes['ui-history'] || changes.summary) unmountView.refresh?.();
+    if (historyChange || summaryChange) unmountView.refresh?.();
   });
   settings.onclick = () => send({
     type: 'open-workspace'

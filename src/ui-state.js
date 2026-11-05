@@ -47,8 +47,10 @@ export function progressText(state) {
   if (waiting) return saved + waiting + (state.waitElapsed >= 5 ? ` ${state.waitElapsed} с` : '');
   return saved + (pythonPhaseText(state.pythonPhase) || state.current || 'Выполняю задачу…');
 }
-export function belongsToChat(state, url, tabId) {
-  if (!state || state.ownerTabId !== tabId) return false;
+export function belongsToChat(state, url, tabId, chatId) {
+  if (!state) return false;
+  if (chatId && state.chatId === chatId) return true;
+  if (state.ownerTabId !== tabId && state.ownerURL !== url) return false;
   if (!state.ownerURL || state.ownerURL === url) return true;
   // A first submission creates a conversation URL from the empty chat.
   return state.status === 'running' && ['/', '/a/chat', '/a/chat/'].includes(new URL(state.ownerURL).pathname);
@@ -57,7 +59,11 @@ export function belongsToChat(state, url, tabId) {
 /** Execution receipts, not model prose, determine history status. */
 function displayProgress(value) {
   if (typeof value === 'string') {
-    try { value = JSON.parse(value); } catch { return value; }
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return value;
+    }
   }
   if (value && typeof value === 'object') {
     if (Number.isFinite(value.done) && Number.isFinite(value.total)) return `Обработано ${value.done} из ${value.total}`;
@@ -96,6 +102,7 @@ export function projectHistory(state) {
 
 export function projectTask(state) {
   return {
+    chatId: state.chatId,
     taskId: state.id,
     status: state.status,
     phase: state.phase,
